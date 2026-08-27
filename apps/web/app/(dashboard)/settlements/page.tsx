@@ -4,435 +4,357 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Modal } from "@/components/ui/Modal";
 
-interface Friend {
+interface Settlement {
   id: string;
-  name: string;
-  email: string | null;
+  friend_id: string;
+  friend_name: string;
+  amount_minor: number;
+  currency: string;
+  direction: "I_PAID" | "THEY_PAID";
+  settlement_date: string;
+  notes?: string;
 }
 
 interface Balance {
-  person_type: "USER" | "FRIEND";
   person_id: string;
   person_name: string;
   net_balance_minor: number;
   currency: string;
-  description: string;
 }
 
-interface Settlement {
+interface Friend {
   id: string;
-  from_person_type: "USER" | "FRIEND";
-  from_person_id: string;
-  to_person_type: "USER" | "FRIEND";
-  to_person_id: string;
-  amount_minor: number;
-  currency: string;
-  settlement_date: string;
-  note: string | null;
-  reference: string | null;
+  name: string;
+}
+
+function directionLabel(direction: "I_PAID" | "THEY_PAID", friendName: string) {
+  return direction === "I_PAID" ? `You paid ${friendName}` : `${friendName} paid you`;
 }
 
 export default function SettlementsPage() {
   const { user } = useAuthStore();
-  const [balances, setBalances] = useState<Balance[]>([]);
+  const currency = user?.currency ?? "INR";
+
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [balances, setBalances] = useState<Balance[]>([]);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Form State
-  const [showFormModal, setShowFormModal] = useState(false);
-  const [fromPerson, setFromPerson] = useState(""); // "USER:id" or "FRIEND:id"
-  const [toPerson, setToPerson] = useState(""); // "USER:id" or "FRIEND:id"
+  // Record modal
+  const [showRecord, setShowRecord] = useState(false);
+  const [step, setStep] = useState<"form" | "confirm">("form");
+  const [friendId, setFriendId] = useState("");
   const [amount, setAmount] = useState("");
-  const [settlementDate, setSettlementDate] = useState(new Date().toISOString().split("T")[0]);
-  const [note, setNote] = useState("");
-  const [reference, setReference] = useState("");
-  const [formLoading, setFormLoading] = useState(false);
-  const [serverError, setServerError] = useState<string | null>(null);
+  const [direction, setDirection] = useState<"I_PAID" | "THEY_PAID">("I_PAID");
+  const [settleDate, setSettleDate] = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const fetchData = async () => {
+  // Delete
+  const [deleteTarget, setDeleteTarget] = useState<Settlement | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const fetchAll = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const [balancesRes, settlementsRes, friendsRes] = await Promise.all([
-        api.get("/balances"),
+      const [sRes, bRes, fRes] = await Promise.all([
         api.get("/settlements"),
+        api.get("/balances"),
         api.get("/friends"),
       ]);
-      setBalances(balancesRes.data);
-      setSettlements(settlementsRes.data);
-      setFriends(friendsRes.data);
-    } catch (err) {
-      console.error(err);
+      setSettlements(sRes.data ?? []);
+      setBalances(bRes.data ?? []);
+      setFriends(fRes.data ?? []);
+    } catch {
+      setError("Unable to load settlements data. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
-  const handleRecordSettlement = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanAmount = parseFloat(amount.replace(/[^\d.]/g, ""));
-    if (isNaN(cleanAmount) || cleanAmount <= 0 || !fromPerson || !toPerson) return;
-    if (fromPerson === toPerson) {
-      setServerError("Source and destination cannot be the same.");
-      return;
-    }
+  const selectedFriend = friends.find(f => f.id === friendId);
+  const amountMinor = Math.round(parseFloat(amount) * 100);
 
-    setFormLoading(true);
-    setServerError(null);
-
-    const [fromType, fromId] = fromPerson.split(":");
-    const [toType, toId] = toPerson.split(":");
-
+  const handleRecord = async () => {
+    setSubmitting(true);
+    setFormError(null);
     try {
       await api.post("/settlements", {
-        from_person_type: fromType,
-        from_person_id: fromId,
-        to_person_type: toType,
-        to_person_id: toId,
-        amount_minor: Math.round(cleanAmount * 100),
-        currency: user?.currency || "INR",
-        settlement_date: settlementDate,
-        note: note || null,
-        reference: reference || null,
+        friend_id: friendId,
+        amount_minor: amountMinor,
+        currency,
+        direction,
+        settlement_date: settleDate,
+        notes,
       });
-
-      setShowFormModal(false);
-      setAmount("");
-      setNote("");
-      setReference("");
-      fetchData();
+      setShowRecord(false);
+      setStep("form");
+      setFriendId(""); setAmount(""); setDirection("I_PAID"); setNotes("");
+      fetchAll();
     } catch (err: any) {
-      setServerError(err.response?.data?.detail || "Failed to record settlement.");
+      setFormError(err.response?.data?.detail || "Unable to record settlement. Please try again.");
+      setStep("form");
     } finally {
-      setFormLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const initSettlementForm = (bal: Balance) => {
-    if (!user) return;
-    if (bal.net_balance_minor > 0) {
-      // They owe you money: repayment from FRIEND to USER
-      setFromPerson(`FRIEND:${bal.person_id}`);
-      setToPerson(`USER:${user.id}`);
-      setAmount((bal.net_balance_minor / 100).toString());
-    } else if (bal.net_balance_minor < 0) {
-      // You owe them money: repayment from USER to FRIEND
-      setFromPerson(`USER:${user.id}`);
-      setToPerson(`FRIEND:${bal.person_id}`);
-      setAmount((Math.abs(bal.net_balance_minor) / 100).toString());
-    } else {
-      // Settled
-      setFromPerson(`USER:${user.id}`);
-      setToPerson(`FRIEND:${bal.person_id}`);
-      setAmount("");
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/settlements/${deleteTarget.id}`);
+      setDeleteTarget(null);
+      fetchAll();
+    } catch {
+      setError("Unable to delete settlement. Please try again.");
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
     }
-    setSettlementDate(new Date().toISOString().split("T")[0]);
-    setNote("Settling ledger");
-    setReference("");
-    setShowFormModal(true);
   };
 
-  const getPersonName = (type: string, id: string) => {
-    if (type === "USER") return "You";
-    return friends.find(f => f.id === id)?.name || "Unknown";
-  };
-
-  const userCurrency = user?.currency || "INR";
+  const nonZeroBalances = balances.filter(b => b.net_balance_minor !== 0);
 
   return (
     <div className="animate-fade-in">
       <div className="page-header">
         <div>
           <h1 className="page-title">Settlements</h1>
-          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: "4px" }}>
-            Record debt repayments and view full settlement logs.
+          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: 2 }}>
+            Record payments and track what you owe or are owed
           </p>
         </div>
-        <button
-          onClick={() => {
-            if (user) {
-              setFromPerson(`USER:${user.id}`);
-              setToPerson("");
-              setAmount("");
-              setNote("");
-              setReference("");
-              setShowFormModal(true);
-            }
-          }}
-          className="btn btn-primary"
-        >
-          ➕ Record Settlement
+        <button className="btn btn-primary" onClick={() => { setShowRecord(true); setStep("form"); }}>
+          + Record Settlement
         </button>
       </div>
 
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
       {loading ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: "80px 0" }}>
-          <div style={{
-            width: "30px",
-            height: "30px",
-            border: "3px solid var(--color-border)",
-            borderTopColor: "var(--color-accent)",
-            borderRadius: "50%",
-            animation: "spin 0.8s linear infinite",
-          }} />
-        </div>
+        <LoadingSpinner centered />
       ) : (
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 2fr",
-          gap: "var(--space-6)",
-        }} className="settlements-grid">
-          {/* Left Column: Outstanding Balances */}
-          <div>
-            <div className="card" style={{ padding: "var(--space-4)" }}>
-              <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>
-                Outstanding Balances
-              </h3>
-              {balances.filter(b => b.net_balance_minor !== 0).length === 0 ? (
-                <p style={{ textAlign: "center", padding: "20px 0", color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
-                  All group balances are settled! 🎉
-                </p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-                  {balances.filter(b => b.net_balance_minor !== 0).map((bal) => (
-                    <div key={bal.person_id} style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "var(--space-2)",
-                      padding: "var(--space-3)",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: "var(--radius-md)",
-                      backgroundColor: "var(--color-surface-2)",
+        <>
+          {/* Outstanding balances */}
+          <div className="card" style={{ padding: "var(--space-5)", marginBottom: "var(--space-6)" }}>
+            <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>Outstanding Balances</h2>
+            {nonZeroBalances.length === 0 ? (
+              <EmptyState icon="🤝" title="You're all settled" description="No outstanding balances with any friends." />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {nonZeroBalances.map(b => {
+                  const isOwed = b.net_balance_minor > 0;
+                  return (
+                    <div key={b.person_id} style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "var(--space-4) 0",
+                      borderBottom: "1px solid var(--color-border)",
                     }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>{bal.person_name}</span>
-                        <span className={`amount ${
-                          bal.net_balance_minor > 0 ? "amount-positive" : "amount-negative"
-                        }`} style={{ fontWeight: 700 }}>
-                          {bal.net_balance_minor > 0 ? "+" : ""}
-                          {formatMinor(bal.net_balance_minor, bal.currency)}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: "10px", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
-                          {bal.description}
-                        </span>
-                        <button
-                          onClick={() => initSettlementForm(bal)}
-                          className="btn btn-secondary btn-sm"
-                          style={{ height: "26px", fontSize: "10px" }}
-                        >
-                          Settle
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column: Settlement History Logs */}
-          <div>
-            <div className="card" style={{ padding: "var(--space-5)" }}>
-              <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>
-                Repayment Logs (Auditable)
-              </h3>
-              {settlements.length === 0 ? (
-                <p style={{ textAlign: "center", padding: "40px 0", color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
-                  No settlement records found.
-                </p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-                  {settlements.map((s) => {
-                    const fromName = getPersonName(s.from_person_type, s.from_person_id);
-                    const toName = getPersonName(s.to_person_type, s.to_person_id);
-
-                    return (
-                      <div key={s.id} style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "var(--space-3)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: "var(--radius-md)",
-                      }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+                        <Avatar name={b.person_name} />
                         <div>
-                          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>
-                            💸 {fromName} paid {toName}
-                          </div>
-                          {s.note && (
-                            <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)", marginTop: "2px" }}>
-                              Note: {s.note}
-                            </div>
-                          )}
-                          <div style={{ fontSize: "10px", color: "var(--color-text-muted)", marginTop: "2px" }}>
-                            {s.settlement_date} {s.reference && `• UPI Ref: ${s.reference}`}
+                          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>{b.person_name}</div>
+                          <div style={{ fontSize: "var(--text-xs)", color: isOwed ? "var(--color-success)" : "var(--color-danger)", fontWeight: 500 }}>
+                            {isOwed ? "Owes you" : "You owe"}
                           </div>
                         </div>
-                        <span className="amount" style={{ fontWeight: 700, fontSize: "var(--text-base)" }}>
-                          {formatMinor(s.amount_minor, s.currency)}
-                        </span>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
+                        <span className="amount" style={{ fontSize: "var(--text-lg)", color: isOwed ? "var(--color-success)" : "var(--color-danger)" }}>
+                          {formatMinor(Math.abs(b.net_balance_minor), b.currency)}
+                        </span>
+                        <button className="btn btn-secondary btn-sm" onClick={() => {
+                          setFriendId(b.person_id); setShowRecord(true); setStep("form");
+                          setDirection(isOwed ? "THEY_PAID" : "I_PAID");
+                        }}>Settle</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        </div>
+
+          {/* Settlement history */}
+          <div className="card" style={{ padding: "var(--space-5)" }}>
+            <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>Settlement History</h2>
+            {settlements.length === 0 ? (
+              <EmptyState icon="📋" title="No settlements recorded" description="Once you record a payment, it will appear here." />
+            ) : (
+              settlements.map(s => (
+                <div key={s.id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "var(--space-4) 0",
+                  borderBottom: "1px solid var(--color-border)",
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>
+                      {directionLabel(s.direction, s.friend_name)}
+                    </div>
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: 2 }}>
+                      {s.settlement_date}{s.notes ? ` · ${s.notes}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
+                    <span className={`amount ${s.direction === "I_PAID" ? "amount-negative" : "amount-positive"}`} style={{ fontSize: "var(--text-base)" }}>
+                      {formatMinor(s.amount_minor, s.currency)}
+                    </span>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setDeleteTarget(s)} aria-label="Delete settlement">✕</button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
       )}
 
       {/* Record Settlement Modal */}
-      {showFormModal && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          backgroundColor: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000,
-          padding: "var(--space-4)",
-        }}>
-          <div className="card animate-fade-in" style={{
-            width: "100%",
-            maxWidth: "400px",
-            padding: "var(--space-6)",
-            backgroundColor: "var(--color-surface)",
-            borderRadius: "var(--radius-lg)",
-          }}>
-            <h3 style={{ fontSize: "var(--text-lg)", fontWeight: 700, marginBottom: "var(--space-4)", color: "var(--color-primary)" }}>
-              Record a Repayment
-            </h3>
-            <form onSubmit={handleRecordSettlement}>
-              {serverError && (
-                <div style={{
-                  backgroundColor: "var(--color-danger-bg)",
-                  color: "var(--color-danger)",
-                  padding: "var(--space-2) var(--space-3)",
-                  borderRadius: "var(--radius-sm)",
-                  fontSize: "var(--text-sm)",
-                  marginBottom: "var(--space-4)",
-                }}>
-                  {serverError}
-                </div>
-              )}
-
-              <div className="form-group">
-                <label className="form-label">Who Paid?</label>
-                <select
-                  className="input"
-                  style={{ padding: "0 var(--space-2)" }}
-                  value={fromPerson}
-                  onChange={(e) => setFromPerson(e.target.value)}
-                >
-                  <option value={`USER:${user?.id}`}>You (User)</option>
-                  {friends.map(f => (
-                    <option key={f.id} value={`FRIEND:${f.id}`}>{f.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Who Received?</label>
-                <select
-                  className="input"
-                  style={{ padding: "0 var(--space-2)" }}
-                  value={toPerson}
-                  onChange={(e) => setToPerson(e.target.value)}
-                >
-                  <option value="">Select recipient...</option>
-                  <option value={`USER:${user?.id}`}>You (User)</option>
-                  {friends.map(f => (
-                    <option key={f.id} value={`FRIEND:${f.id}`}>{f.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
-                <div className="form-group">
-                  <label className="form-label">Amount</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="0.00"
-                    className="input input-amount"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Date</label>
-                  <input
-                    type="date"
-                    required
-                    className="input"
-                    value={settlementDate}
-                    onChange={(e) => setSettlementDate(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">UPI Reference / Ref ID (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. UPI-12345"
-                  className="input"
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: "var(--space-6)" }}>
-                <label className="form-label">Note (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. dinner share repayment"
-                  className="input"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end" }}>
-                <button
-                  type="button"
-                  onClick={() => setShowFormModal(false)}
-                  className="btn btn-secondary"
-                  disabled={formLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={formLoading}
-                >
-                  {formLoading ? "Recording..." : "Record"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      <style jsx global>{`
-        @media (max-width: 768px) {
-          .settlements-grid {
-            grid-template-columns: 1fr !important;
-          }
+      <Modal
+        open={showRecord}
+        onClose={() => { setShowRecord(false); setStep("form"); setFormError(null); }}
+        title="Record Settlement"
+        footer={
+          step === "form" ? (
+            <>
+              <button className="btn btn-secondary" onClick={() => setShowRecord(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={!friendId || !amount || isNaN(amountMinor) || amountMinor <= 0}
+                onClick={() => { setFormError(null); setStep("confirm"); }}
+              >
+                Review →
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-secondary" onClick={() => setStep("form")}>← Back</button>
+              <button className="btn btn-primary" onClick={handleRecord} disabled={submitting}>
+                {submitting ? "Saving…" : "Confirm & Save"}
+              </button>
+            </>
+          )
         }
-      `}</style>
+      >
+        {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+
+        {step === "form" ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" htmlFor="st-friend">Friend</label>
+              <select id="st-friend" className="input" value={friendId} onChange={e => setFriendId(e.target.value)} style={{ padding: "0 var(--space-3)" }}>
+                <option value="">Select a friend…</option>
+                {friends.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" htmlFor="st-amount">Amount</label>
+              <input id="st-amount" className="input input-amount" type="number" min="0.01" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Who paid?</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
+                {(["I_PAID", "THEY_PAID"] as const).map(d => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDirection(d)}
+                    style={{
+                      padding: "var(--space-3)",
+                      borderRadius: "var(--radius-md)",
+                      border: `2px solid ${direction === d ? "var(--color-accent)" : "var(--color-border)"}`,
+                      background: direction === d ? "var(--color-accent-light)" : "var(--color-surface-2)",
+                      cursor: "pointer", fontWeight: 600, fontSize: "var(--text-sm)",
+                      color: direction === d ? "var(--color-accent)" : "var(--color-text)",
+                      transition: "all var(--transition-fast)",
+                    }}
+                    aria-pressed={direction === d}
+                  >
+                    {d === "I_PAID" ? "I paid them" : "They paid me"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" htmlFor="st-date">Date</label>
+              <input id="st-date" className="input" type="date" value={settleDate} onChange={e => setSettleDate(e.target.value)} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" htmlFor="st-notes">Notes (optional)</label>
+              <input id="st-notes" className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Dinner from last week" />
+            </div>
+          </div>
+        ) : (
+          <div style={{
+            background: "var(--color-surface-2)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--space-5)",
+            display: "flex", flexDirection: "column", gap: "var(--space-3)",
+          }}>
+            <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700 }}>Confirm Settlement</h3>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+              <span style={{ color: "var(--color-text-secondary)" }}>Action</span>
+              <span style={{ fontWeight: 600 }}>{direction === "I_PAID" ? `You paid ${selectedFriend?.name}` : `${selectedFriend?.name} paid you`}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+              <span style={{ color: "var(--color-text-secondary)" }}>Amount</span>
+              <span className="amount" style={{ fontSize: "var(--text-lg)", fontWeight: 700 }}>{formatMinor(amountMinor, currency)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+              <span style={{ color: "var(--color-text-secondary)" }}>Date</span>
+              <span style={{ fontWeight: 600 }}>{settleDate}</span>
+            </div>
+            {notes && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Notes</span>
+                <span style={{ fontWeight: 600 }}>{notes}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Delete Confirmation */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete Settlement"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick={handleDelete} disabled={deleting}>
+              {deleting ? "Deleting…" : "Yes, Delete"}
+            </button>
+          </>
+        }
+      >
+        <p style={{ fontSize: "var(--text-base)" }}>
+          Delete this settlement of <strong>{deleteTarget && formatMinor(deleteTarget.amount_minor, deleteTarget.currency)}</strong>?
+        </p>
+        <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginTop: "var(--space-2)" }}>This action cannot be undone.</p>
+      </Modal>
     </div>
+  );
+}
+
+function Avatar({ name }: { name: string }) {
+  const initials = name.split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase();
+  return (
+    <div style={{
+      width: 36, height: 36, borderRadius: "50%",
+      background: "var(--color-accent-light)", color: "var(--color-accent)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: "var(--text-xs)", fontWeight: 700, flexShrink: 0,
+    }}>{initials}</div>
   );
 }

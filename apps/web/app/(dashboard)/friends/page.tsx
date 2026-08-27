@@ -4,621 +4,329 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Modal } from "@/components/ui/Modal";
+import Link from "next/link";
 
 interface Friend {
   id: string;
   name: string;
-  email: string | null;
-  phone: string | null;
-  status: "ACTIVE" | "ARCHIVED";
-}
-
-interface SharedExpense {
-  id: string;
-  title: string;
-  total_amount_minor: number;
-  currency: string;
-  expense_date: string;
-  payer_type: string;
-  payer_id: string;
-  participants: Array<{
-    person_id: string;
-    person_type: string;
-    share_amount_minor: number;
-    paid_amount_minor: number;
-  }>;
-}
-
-interface Settlement {
-  id: string;
-  from_person_id: string;
-  from_person_type: string;
-  to_person_id: string;
-  to_person_type: string;
-  amount_minor: number;
-  currency: string;
-  settlement_date: string;
-  note: string | null;
-}
-
-interface Balance {
-  person_id: string;
+  email?: string;
+  phone?: string;
+  is_archived: boolean;
   net_balance_minor: number;
   currency: string;
-  description: string;
+}
+
+interface Activity {
+  id: string;
+  type: "shared" | "settlement";
+  title: string;
+  amount_minor: number;
+  currency: string;
+  date: string;
+  direction?: string;
+}
+
+function Avatar({ name, size = 40 }: { name: string; size?: number }) {
+  const initials = name.split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase();
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: "50%",
+      background: "var(--color-accent-light)", color: "var(--color-accent)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: size < 36 ? "var(--text-xs)" : "var(--text-sm)",
+      fontWeight: 700, flexShrink: 0,
+    }}>{initials}</div>
+  );
+}
+
+function balanceLabel(minor: number, currency: string) {
+  if (minor === 0) return { text: "Settled", color: "var(--color-text-muted)" };
+  if (minor > 0)   return { text: `Owes you ${formatMinor(minor, currency)}`, color: "var(--color-success)" };
+  return { text: `You owe ${formatMinor(Math.abs(minor), currency)}`, color: "var(--color-danger)" };
 }
 
 export default function FriendsPage() {
   const { user } = useAuthStore();
-  const [friends, setFriends] = useState<Friend[]>([]);
-  const [balances, setBalances] = useState<Record<string, Balance>>({});
-  const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
-  const [sharedExpenses, setSharedExpenses] = useState<SharedExpense[]>([]);
-  const [settlements, setSettlements] = useState<Settlement[]>([]);
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const currency = user?.currency ?? "INR";
 
-  // Modals / forms state
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [formLoading, setFormLoading] = useState(false);
-  const [serverError, setServerError] = useState<string | null>(null);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Detail panel
+  const [selected, setSelected] = useState<Friend | null>(null);
+  const [activity, setActivity] = useState<Activity[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+
+  // Modals
+  const [showAdd, setShowAdd] = useState(false);
+  const [editTarget, setEditTarget] = useState<Friend | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Friend | null>(null);
+  const [fname, setFname] = useState("");
+  const [femail, setFemail] = useState("");
+  const [fphone, setFphone] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const fetchFriends = async () => {
-    setLoading(true);
+    setLoading(true); setError(null);
     try {
-      const [friendsRes, balancesRes] = await Promise.all([
-        api.get(`/friends?include_archived=${includeArchived}`),
-        api.get("/balances"),
+      const res = await api.get("/friends");
+      setFriends(res.data ?? []);
+    } catch { setError("Unable to load friends. Please try again."); }
+    finally { setLoading(false); }
+  };
+
+  const loadActivity = async (friend: Friend) => {
+    setSelected(friend); setActivityLoading(true); setActivity([]);
+    try {
+      const [seRes, stRes] = await Promise.all([
+        api.get(`/shared-expenses?friend_id=${friend.id}&page=1&page_size=10`),
+        api.get(`/settlements?friend_id=${friend.id}`),
       ]);
-
-      setFriends(friendsRes.data);
-
-      const balMap: Record<string, Balance> = {};
-      balancesRes.data.forEach((b: any) => {
-        balMap[b.person_id] = {
-          person_id: b.person_id,
-          net_balance_minor: b.net_balance_minor,
-          currency: b.currency,
-          description: b.description,
-        };
-      });
-      setBalances(balMap);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+      const shared: Activity[] = (seRes.data?.items ?? []).map((e: any) => ({
+        id: e.id, type: "shared" as const, title: e.title,
+        amount_minor: e.total_amount_minor, currency: e.currency, date: e.expense_date,
+      }));
+      const settled: Activity[] = (stRes.data ?? []).map((s: any) => ({
+        id: s.id, type: "settlement" as const,
+        title: s.direction === "I_PAID" ? `You paid ${friend.name}` : `${friend.name} paid you`,
+        amount_minor: s.amount_minor, currency: s.currency, date: s.settlement_date,
+      }));
+      setActivity([...shared, ...settled].sort((a, b) => b.date.localeCompare(a.date)));
+    } catch { /* non-critical */ }
+    finally { setActivityLoading(false); }
   };
 
-  const fetchLedger = async (friendId: string) => {
-    try {
-      const [sharedRes, settlementsRes] = await Promise.all([
-        api.get("/shared-expenses"),
-        api.get("/settlements"),
-      ]);
-      // Filter shared expenses involving this friend
-      const filteredShared = sharedRes.data.filter((se: SharedExpense) =>
-        se.participants.some(p => p.person_id === friendId)
-      );
-      // Filter settlements involving this friend
-      const filteredSettlements = settlementsRes.data.filter((s: Settlement) =>
-        s.from_person_id === friendId || s.to_person_id === friendId
-      );
-      setSharedExpenses(filteredShared);
-      setSettlements(filteredSettlements);
-    } catch (err) {
-      console.error("Failed to load friend ledger", err);
-    }
-  };
+  useEffect(() => { fetchFriends(); }, []);
 
-  useEffect(() => {
-    fetchFriends();
-  }, [includeArchived]);
+  const openAdd = () => { setFname(""); setFemail(""); setFphone(""); setFormError(null); setShowAdd(true); };
+  const openEdit = (f: Friend) => { setEditTarget(f); setFname(f.name); setFemail(f.email ?? ""); setFphone(f.phone ?? ""); setFormError(null); };
 
-  useEffect(() => {
-    if (selectedFriend) {
-      fetchLedger(selectedFriend.id);
-    }
-  }, [selectedFriend]);
-
-  const handleAddFriend = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name) return;
-    setFormLoading(true);
-    setServerError(null);
+    if (!fname.trim()) { setFormError("Name is required."); return; }
+    setSubmitting(true); setFormError(null);
+    const payload = { name: fname.trim(), email: femail || undefined, phone: fphone || undefined };
     try {
-      await api.post("/friends", {
-        name,
-        email: email || null,
-        phone: phone || null,
-      });
-      setShowAddModal(false);
-      setName("");
-      setEmail("");
-      setPhone("");
+      if (editTarget) { await api.put(`/friends/${editTarget.id}`, payload); setEditTarget(null); }
+      else { await api.post("/friends", payload); setShowAdd(false); }
       fetchFriends();
-    } catch (err: any) {
-      setServerError(err.response?.data?.detail || "Failed to add friend.");
-    } finally {
-      setFormLoading(false);
-    }
+    } catch (err: any) { setFormError(err.response?.data?.detail || "Unable to save. Please try again."); }
+    finally { setSubmitting(false); }
   };
 
-  const handleEditFriend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedFriend || !name) return;
-    setFormLoading(true);
-    setServerError(null);
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setSubmitting(true);
     try {
-      await api.patch(`/friends/${selectedFriend.id}`, {
-        name,
-        email: email || null,
-        phone: phone || null,
-      });
-      setShowEditModal(false);
-      setSelectedFriend(prev => prev ? { ...prev, name, email: email || null, phone: phone || null } : null);
+      await api.delete(`/friends/${deleteTarget.id}`);
+      setDeleteTarget(null);
+      if (selected?.id === deleteTarget.id) setSelected(null);
       fetchFriends();
-    } catch (err: any) {
-      setServerError(err.response?.data?.detail || "Failed to update friend.");
-    } finally {
-      setFormLoading(false);
-    }
+    } catch { setError("Unable to delete friend."); setDeleteTarget(null); }
+    finally { setSubmitting(false); }
   };
 
-  const handleArchiveFriend = async (friendId: string) => {
-    if (!confirm("Are you sure you want to archive this friend? Active balances remain active.")) return;
+  const toggleArchive = async (f: Friend) => {
     try {
-      await api.post(`/friends/${friendId}/archive`);
-      if (selectedFriend?.id === friendId) {
-        setSelectedFriend(null);
-      }
+      await api.post(`/friends/${f.id}/archive`);
       fetchFriends();
-    } catch (err) {
-      console.error(err);
-    }
+    } catch { setError("Unable to update archive status."); }
   };
 
-  const handleDeleteFriend = async (friendId: string) => {
-    if (!confirm("Are you sure you want to permanently delete this friend? This is only possible if you share no financial history.")) return;
-    try {
-      await api.delete(`/friends/${friendId}`);
-      if (selectedFriend?.id === friendId) {
-        setSelectedFriend(null);
-      }
-      fetchFriends();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || "Cannot delete friend. They might have transaction history; archive them instead.");
-    }
-  };
+  const visible = friends.filter(f => showArchived ? f.is_archived : !f.is_archived);
 
-  const openEditModal = (friend: Friend) => {
-    setName(friend.name);
-    setEmail(friend.email || "");
-    setPhone(friend.phone || "");
-    setShowEditModal(true);
-  };
-
-  const userCurrency = user?.currency || "INR";
+  const FormFields = (
+    <>
+      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      <form id="friend-form" onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label" htmlFor="f-name">Full Name *</label>
+          <input id="f-name" className="input" required value={fname} onChange={e => setFname(e.target.value)} placeholder="Rohan Sharma" />
+        </div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label" htmlFor="f-email">Email (optional)</label>
+          <input id="f-email" className="input" type="email" value={femail} onChange={e => setFemail(e.target.value)} placeholder="rohan@example.com" />
+        </div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label" htmlFor="f-phone">Phone (optional)</label>
+          <input id="f-phone" className="input" value={fphone} onChange={e => setFphone(e.target.value)} placeholder="+91 98765 43210" />
+        </div>
+      </form>
+    </>
+  );
 
   return (
     <div className="animate-fade-in">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Friend Ledgers</h1>
-          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: "4px" }}>
-            Add friends, view balances, and check sharing history.
-          </p>
+          <h1 className="page-title">Friends</h1>
+          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: 2 }}>Manage shared expenses and track balances</p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
-          ➕ Add Friend
-        </button>
+        <div style={{ display: "flex", gap: "var(--space-2)" }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowArchived(v => !v)}>
+            {showArchived ? "Show Active" : "Show Archived"}
+          </button>
+          <button className="btn btn-primary" onClick={openAdd}>+ Add Friend</button>
+        </div>
       </div>
 
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 2fr",
-        gap: "var(--space-6)",
-      }} className="friends-grid">
-        {/* Left Column: Friend list */}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
+      <div style={{ display: "grid", gridTemplateColumns: selected ? "340px 1fr" : "1fr", gap: "var(--space-6)", alignItems: "start" }} className="friends-grid">
+        {/* Friend List */}
         <div>
-          <div className="card" style={{ padding: "var(--space-4)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)" }}>
-              <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700 }}>Friends List</h3>
-              <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={includeArchived}
-                  onChange={(e) => setIncludeArchived(e.target.checked)}
-                />
-                Show Archived
-              </label>
-            </div>
-
-            {loading ? (
-              <div style={{ display: "flex", justifyContent: "center", padding: "20px 0" }}>
-                <div style={{
-                  width: "24px",
-                  height: "24px",
-                  border: "2.5px solid var(--color-border)",
-                  borderTopColor: "var(--color-accent)",
-                  borderRadius: "50%",
-                  animation: "spin 0.8s linear infinite",
-                }} />
-              </div>
-            ) : friends.length === 0 ? (
-              <div style={{ textAlign: "center", color: "var(--color-text-muted)", padding: "20px 0", fontSize: "var(--text-sm)" }}>
-                No friends added yet.
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                {friends.map((f) => {
-                  const bal = balances[f.id];
-                  const isSelected = selectedFriend?.id === f.id;
-                  return (
-                    <div
-                      key={f.id}
-                      onClick={() => setSelectedFriend(f)}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "var(--space-3)",
-                        border: isSelected ? "1.5px solid var(--color-accent)" : "1px solid var(--color-border)",
-                        borderRadius: "var(--radius-md)",
-                        backgroundColor: isSelected ? "var(--color-accent-light)" : "var(--color-surface-2)",
-                        cursor: "pointer",
-                        transition: "all var(--transition-fast)",
-                      }}
-                      className="friend-list-item"
-                    >
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--color-text)" }}>
-                          {f.name} {f.status === "ARCHIVED" && <span style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>(Archived)</span>}
-                        </div>
-                        <div style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                          {f.email || "No email"}
-                        </div>
-                      </div>
-                      <span className={`amount ${
-                        bal && bal.net_balance_minor > 0 ? "amount-positive" : bal && bal.net_balance_minor < 0 ? "amount-negative" : "amount-zero"
-                      }`} style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>
-                        {bal && bal.net_balance_minor !== 0
-                          ? `${bal.net_balance_minor > 0 ? "+" : ""}${formatMinor(bal.net_balance_minor, bal.currency)}`
-                          : "Settled"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Column: Friend detail ledger */}
-        <div>
-          {selectedFriend ? (
-            <div className="card" style={{ padding: "var(--space-5)" }}>
-              {/* Ledger Header */}
-              <div style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-                borderBottom: "1px solid var(--color-border)",
-                paddingBottom: "var(--space-4)",
-                marginBottom: "var(--space-4)",
-              }}>
-                <div>
-                  <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 700 }}>{selectedFriend.name}</h2>
-                  <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", marginTop: "2px" }}>
-                    {selectedFriend.email && `Email: ${selectedFriend.email} `}
-                    {selectedFriend.phone && `• Phone: ${selectedFriend.phone}`}
-                  </p>
-                </div>
-                <div style={{ display: "flex", gap: "var(--space-2)" }}>
-                  <button onClick={() => openEditModal(selectedFriend)} className="btn btn-secondary btn-sm">
-                    ✏️ Edit
-                  </button>
-                  {selectedFriend.status === "ACTIVE" ? (
-                    <button onClick={() => handleArchiveFriend(selectedFriend.id)} className="btn btn-danger btn-sm" style={{ backgroundColor: "transparent" }}>
-                      🗄️ Archive
-                    </button>
-                  ) : (
-                    <button onClick={() => handleDeleteFriend(selectedFriend.id)} className="btn btn-danger btn-sm">
-                      🗑️ Delete
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Status Balance */}
-              <div style={{
-                display: "flex",
-                justifyContent: "space-between",
-                backgroundColor: "var(--color-surface-2)",
-                padding: "var(--space-4)",
-                borderRadius: "var(--radius-md)",
-                marginBottom: "var(--space-5)",
-              }}>
-                <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>Net Balance:</span>
-                <span className={`amount ${
-                  balances[selectedFriend.id]?.net_balance_minor > 0 ? "amount-positive" : balances[selectedFriend.id]?.net_balance_minor < 0 ? "amount-negative" : "amount-zero"
-                }`} style={{ fontSize: "var(--text-lg)", fontWeight: 700 }}>
-                  {balances[selectedFriend.id]
-                    ? `${balances[selectedFriend.id].net_balance_minor > 0 ? "+" : ""}${formatMinor(balances[selectedFriend.id].net_balance_minor, balances[selectedFriend.id].currency)}`
-                    : "Settled"}
-                </span>
-              </div>
-
-              {/* Shared Expenses & Settlements Tabs */}
-              <div>
-                <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-3)" }}>Ledger Activity</h3>
-                {sharedExpenses.length === 0 && settlements.length === 0 ? (
-                  <p style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", textAlign: "center", padding: "20px 0" }}>
-                    No shared transactions logged with this friend.
-                  </p>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-                    {/* List transactions sorted by date */}
-                    {[
-                      ...sharedExpenses.map(se => ({ ...se, type: "EXPENSE" })),
-                      ...settlements.map(s => ({ ...s, type: "SETTLEMENT" }))
-                    ].sort((a: any, b: any) => b.expense_date?.localeCompare(a.settlement_date) || b.settlement_date?.localeCompare(a.expense_date)).map((activity: any, index) => {
-                      const isExpense = activity.type === "EXPENSE";
-                      const activityDate = isExpense ? activity.expense_date : activity.settlement_date;
-
-                      return (
-                        <div key={activity.id + "-" + index} style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          padding: "var(--space-3)",
-                          border: "1px solid var(--color-border)",
-                          borderRadius: "var(--radius-md)",
-                        }}>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>
-                              {isExpense ? `⚖️ Shared: ${activity.title}` : `💳 Settlement: ${activity.note || "Repayment"}`}
-                            </div>
-                            <div style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "2px" }}>
-                              {activityDate} {activity.reference && `• Ref: ${activity.reference}`}
-                            </div>
-                          </div>
-                          <div style={{ textAlign: "right" }}>
-                            <div className="amount" style={{ fontWeight: 600 }}>
-                              {formatMinor(isExpense ? activity.total_amount_minor : activity.amount_minor, activity.currency)}
-                            </div>
-                            <div style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>
-                              {isExpense
-                                ? (activity.payer_id === user?.id ? "You paid" : `${selectedFriend.name} paid`)
-                                : (activity.from_person_id === user?.id ? "You paid" : "You received")
-                              }
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+          {loading ? <LoadingSpinner centered /> : visible.length === 0 ? (
+            <div className="card">
+              <EmptyState
+                icon="👥"
+                title={showArchived ? "No archived friends" : "No friends yet"}
+                description={showArchived ? "No friends have been archived." : "Add a friend to start tracking shared expenses and balances."}
+                actionLabel={showArchived ? undefined : "Add Friend"}
+                onAction={showArchived ? undefined : openAdd}
+              />
             </div>
           ) : (
-            <div className="card" style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              height: "100%",
-              padding: "40px",
-              color: "var(--color-text-muted)",
-              fontSize: "var(--text-sm)",
-              minHeight: "300px",
-            }}>
-              Select a friend from the list to view their sharing ledger.
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+              {visible.map(f => {
+                const bl = balanceLabel(f.net_balance_minor, f.currency);
+                const isSelected = selected?.id === f.id;
+                return (
+                  <div
+                    key={f.id}
+                    className="card"
+                    onClick={() => loadActivity(f)}
+                    style={{
+                      padding: "var(--space-4)",
+                      cursor: "pointer",
+                      border: isSelected ? "2px solid var(--color-accent)" : "1px solid var(--color-border)",
+                      transition: "all var(--transition-fast)",
+                      opacity: f.is_archived ? 0.6 : 1,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+                      <Avatar name={f.name} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: "var(--text-base)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        {(f.email || f.phone) && (
+                          <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {f.email ?? f.phone}
+                          </div>
+                        )}
+                        <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: bl.color, marginTop: 2 }}>
+                          {bl.text}
+                        </div>
+                      </div>
+                      {/* Actions */}
+                      <div style={{ display: "flex", gap: "var(--space-1)", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(f)} aria-label={`Edit ${f.name}`}>✎</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => toggleArchive(f)} aria-label={f.is_archived ? "Unarchive" : "Archive"}>
+                          {f.is_archived ? "↩" : "📦"}
+                        </button>
+                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(f)} aria-label={`Delete ${f.name}`}>✕</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
+
+        {/* Detail Panel */}
+        {selected && (
+          <div className="card" style={{ padding: "var(--space-6)" }}>
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)", marginBottom: "var(--space-5)" }}>
+              <Avatar name={selected.name} size={52} />
+              <div>
+                <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 700 }}>{selected.name}</h2>
+                {(selected.email || selected.phone) && (
+                  <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>{selected.email ?? selected.phone}</div>
+                )}
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)} style={{ marginLeft: "auto" }} aria-label="Close detail">✕</button>
+            </div>
+
+            {/* Balance headline */}
+            {(() => {
+              const bl = balanceLabel(selected.net_balance_minor, selected.currency);
+              return (
+                <div style={{
+                  padding: "var(--space-4)", borderRadius: "var(--radius-md)",
+                  background: selected.net_balance_minor > 0 ? "var(--color-success-bg)" : selected.net_balance_minor < 0 ? "var(--color-danger-bg)" : "var(--color-surface-2)",
+                  marginBottom: "var(--space-5)",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}>
+                  <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: bl.color }}>{bl.text}</span>
+                  {selected.net_balance_minor !== 0 && (
+                    <span className="amount" style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: bl.color }}>
+                      {formatMinor(Math.abs(selected.net_balance_minor), selected.currency)}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Quick actions */}
+            <div style={{ display: "flex", gap: "var(--space-3)", marginBottom: "var(--space-5)", flexWrap: "wrap" }}>
+              <Link href="/shared" className="btn btn-secondary btn-sm" style={{ textDecoration: "none" }}>+ Shared Expense</Link>
+              <Link href="/settlements" className="btn btn-secondary btn-sm" style={{ textDecoration: "none" }}>Record Settlement</Link>
+            </div>
+
+            <div className="divider" />
+
+            {/* Activity */}
+            <h3 style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "var(--space-3)", marginTop: "var(--space-4)" }}>Activity</h3>
+            {activityLoading ? <LoadingSpinner centered /> : activity.length === 0 ? (
+              <EmptyState icon="📋" title="No activity yet" description="Shared expenses and settlements with this friend will appear here." />
+            ) : (
+              activity.map(a => (
+                <div key={a.id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "var(--space-3) 0", borderBottom: "1px solid var(--color-border)",
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>{a.title}</div>
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: 2 }}>
+                      {a.type === "shared" ? "Shared expense" : "Settlement"} · {a.date}
+                    </div>
+                  </div>
+                  <span className="amount" style={{ fontSize: "var(--text-sm)" }}>{formatMinor(a.amount_minor, a.currency)}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
 
       {/* Add Modal */}
-      {showAddModal && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          backgroundColor: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000,
-          padding: "var(--space-4)",
-        }}>
-          <div className="card animate-fade-in" style={{
-            width: "100%",
-            maxWidth: "400px",
-            padding: "var(--space-6)",
-            backgroundColor: "var(--color-surface)",
-            borderRadius: "var(--radius-lg)",
-          }}>
-            <h3 style={{ fontSize: "var(--text-lg)", fontWeight: 700, marginBottom: "var(--space-4)", color: "var(--color-primary)" }}>
-              Add New Friend
-            </h3>
-            <form onSubmit={handleAddFriend}>
-              {serverError && (
-                <div style={{
-                  backgroundColor: "var(--color-danger-bg)",
-                  color: "var(--color-danger)",
-                  padding: "var(--space-2) var(--space-3)",
-                  borderRadius: "var(--radius-sm)",
-                  fontSize: "var(--text-sm)",
-                  marginBottom: "var(--space-4)",
-                }}>
-                  {serverError}
-                </div>
-              )}
-              <div className="form-group">
-                <label className="form-label">Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Friend name"
-                  className="input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Email (Optional)</label>
-                <input
-                  type="email"
-                  placeholder="friend@example.com"
-                  className="input"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: "var(--space-6)" }}>
-                <label className="form-label">Phone Number (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="+91 XXXXX XXXXX"
-                  className="input"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end" }}>
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="btn btn-secondary"
-                  disabled={formLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={formLoading}
-                >
-                  {formLoading ? "Adding..." : "Add Friend"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Friend"
+        footer={<><button className="btn btn-secondary" onClick={() => setShowAdd(false)}>Cancel</button><button className="btn btn-primary" form="friend-form" type="submit" disabled={submitting}>{submitting ? "Adding…" : "Add Friend"}</button></>}>
+        {FormFields}
+      </Modal>
 
       {/* Edit Modal */}
-      {showEditModal && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          backgroundColor: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000,
-          padding: "var(--space-4)",
-        }}>
-          <div className="card animate-fade-in" style={{
-            width: "100%",
-            maxWidth: "400px",
-            padding: "var(--space-6)",
-            backgroundColor: "var(--color-surface)",
-            borderRadius: "var(--radius-lg)",
-          }}>
-            <h3 style={{ fontSize: "var(--text-lg)", fontWeight: 700, marginBottom: "var(--space-4)", color: "var(--color-primary)" }}>
-              Edit Friend Details
-            </h3>
-            <form onSubmit={handleEditFriend}>
-              {serverError && (
-                <div style={{
-                  backgroundColor: "var(--color-danger-bg)",
-                  color: "var(--color-danger)",
-                  padding: "var(--space-2) var(--space-3)",
-                  borderRadius: "var(--radius-sm)",
-                  fontSize: "var(--text-sm)",
-                  marginBottom: "var(--space-4)",
-                }}>
-                  {serverError}
-                </div>
-              )}
-              <div className="form-group">
-                <label className="form-label">Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Friend name"
-                  className="input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
+      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Friend"
+        footer={<><button className="btn btn-secondary" onClick={() => setEditTarget(null)}>Cancel</button><button className="btn btn-primary" form="friend-form" type="submit" disabled={submitting}>{submitting ? "Saving…" : "Save Changes"}</button></>}>
+        {FormFields}
+      </Modal>
 
-              <div className="form-group">
-                <label className="form-label">Email (Optional)</label>
-                <input
-                  type="email"
-                  placeholder="friend@example.com"
-                  className="input"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: "var(--space-6)" }}>
-                <label className="form-label">Phone (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="Phone number"
-                  className="input"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end" }}>
-                <button
-                  type="button"
-                  onClick={() => setShowEditModal(false)}
-                  className="btn btn-secondary"
-                  disabled={formLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={formLoading}
-                >
-                  {formLoading ? "Saving..." : "Save Changes"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Delete Confirm */}
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Remove Friend"
+        footer={<><button className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button><button className="btn btn-danger" onClick={handleDelete} disabled={submitting}>{submitting ? "Removing…" : "Yes, Remove"}</button></>}>
+        <p>Remove <strong>{deleteTarget?.name}</strong> from your friends? Shared expense history will be preserved.</p>
+      </Modal>
 
       <style jsx global>{`
-        .friend-list-item:hover {
-          transform: translateY(-1px);
-          box-shadow: var(--shadow-sm);
-        }
-        @media (max-width: 768px) {
-          .friends-grid {
-            grid-template-columns: 1fr !important;
-          }
+        @media (max-width: 900px) {
+          .friends-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
     </div>

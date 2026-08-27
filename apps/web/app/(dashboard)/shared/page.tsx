@@ -4,6 +4,13 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
+import { ClassificationBadge } from "@/components/finance/ClassificationBadge";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Modal } from "@/components/ui/Modal";
+
+const CATEGORIES = ["food", "transport", "health", "entertainment", "shopping", "utilities", "housing", "education", "personal", "other"];
 
 interface Friend {
   id: string;
@@ -37,63 +44,89 @@ interface SharedExpense {
   participants: ParticipantResponse[];
 }
 
+interface Balance {
+  person_id: string;
+  person_name: string;
+  net_balance_minor: number;
+  currency: string;
+}
+
 export default function SharedExpensesPage() {
   const { user } = useAuthStore();
+  const userCurrency = user?.currency || "INR";
+
   const [sharedExpenses, setSharedExpenses] = useState<SharedExpense[]>([]);
   const [friends, setFriends] = useState<Friend[]>([]);
+  const [balances, setBalances] = useState<Balance[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Modal / Form state
-  const [showAddModal, setShowAddModal] = useState(false);
+  // Wizard Modal state
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+
+  // Step 1: Expense details
   const [title, setTitle] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split("T")[0]);
   const [category, setCategory] = useState("other");
+  const [classification, setClassification] = useState<"NEED" | "WANT" | "DREAM">("WANT");
   const [note, setNote] = useState("");
 
-  const [payerType, setPayerType] = useState<"USER" | "FRIEND">("USER");
-  const [payerId, setPayerId] = useState("");
-  const [splitMethod, setSplitMethod] = useState<"EQUAL" | "CUSTOM_AMOUNT" | "PERCENTAGE">("EQUAL");
-
-  // Selection states for participants
+  // Step 2: Participants
   const [selectedUser, setSelectedUser] = useState(true);
   const [selectedFriends, setSelectedFriends] = useState<Record<string, boolean>>({});
 
-  // Input states for custom split amounts & percentages
-  const [customShares, setCustomShares] = useState<Record<string, string>>({}); // id -> text amount
-  const [customPercentages, setCustomPercentages] = useState<Record<string, string>>({}); // id -> text percentage
+  // Step 3: Who paid?
+  const [payerType, setPayerType] = useState<"USER" | "FRIEND">("USER");
+  const [payerId, setPayerId] = useState("");
 
-  const [formLoading, setFormLoading] = useState(false);
-  const [serverError, setServerError] = useState<string | null>(null);
+  // Step 4: Split Method & Share Inputs
+  const [splitMethod, setSplitMethod] = useState<"EQUAL" | "CUSTOM_AMOUNT" | "PERCENTAGE">("EQUAL");
+  const [customShares, setCustomShares] = useState<Record<string, string>>({}); // "type:id" -> string
+  const [customPercentages, setCustomPercentages] = useState<Record<string, string>>({}); // "type:id" -> string
 
-  const fetchSharedExpenses = async () => {
+  const [submitting, setSubmitting] = useState(false);
+  const [wizardError, setWizardError] = useState<string | null>(null);
+
+  const fetchAllData = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const [sharedRes, friendsRes] = await Promise.all([
+      const [sharedRes, friendsRes, balancesRes] = await Promise.all([
         api.get("/shared-expenses"),
         api.get("/friends"),
+        api.get("/balances"),
       ]);
-      setSharedExpenses(sharedRes.data);
-      setFriends(friendsRes.data);
+      setSharedExpenses(sharedRes.data ?? []);
+      setFriends(friendsRes.data ?? []);
+      setBalances(balancesRes.data ?? []);
     } catch (err) {
       console.error("Failed to load shared expenses data", err);
+      setError("Unable to load shared expenses. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSharedExpenses();
+    fetchAllData();
   }, []);
 
-  // Update default payer when user changes payerType
+  // Update default payer when user changes payerType or step progress
   useEffect(() => {
     if (payerType === "USER" && user) {
       setPayerId(user.id);
     } else if (payerType === "FRIEND" && friends.length > 0) {
-      setPayerId(friends[0].id);
+      // Find the first selected friend to be the default payer
+      const selectedFriendIds = friends.filter(f => selectedFriends[f.id]).map(f => f.id);
+      if (selectedFriendIds.length > 0) {
+        setPayerId(selectedFriendIds[0]);
+      } else {
+        setPayerId(friends[0].id);
+      }
     }
-  }, [payerType, friends, user]);
+  }, [payerType, friends, selectedFriends, user]);
 
   const activeParticipantsList = () => {
     const list: Array<{ id: string; type: "USER" | "FRIEND"; name: string }> = [];
@@ -131,7 +164,7 @@ export default function SharedExpensesPage() {
         shareAmounts[key] = base + (idx < remainder ? 1 : 0);
       });
       isValid = true;
-      detailsText = "Split matches total amount (₹" + (totalMinor / 100).toFixed(2) + " equally)";
+      detailsText = `Split matches total amount (${formatMinor(totalMinor, userCurrency)} equally)`;
     } else if (splitMethod === "CUSTOM_AMOUNT") {
       let sumMinor = 0;
       participants.forEach((p) => {
@@ -146,7 +179,7 @@ export default function SharedExpensesPage() {
       if (diff === 0) {
         detailsText = "All shares sum exactly to total.";
       } else {
-        detailsText = `Shares sum: ₹${(sumMinor / 100).toFixed(2)}. ${diff > 0 ? "Owed: ₹" + (diff / 100).toFixed(2) : "Overassigned: ₹" + (Math.abs(diff) / 100).toFixed(2)}`;
+        detailsText = `Shares sum: ${formatMinor(sumMinor, userCurrency)}. ${diff > 0 ? "Owed: " + formatMinor(diff, userCurrency) : "Overassigned: " + formatMinor(Math.abs(diff), userCurrency)}`;
       }
     } else if (splitMethod === "PERCENTAGE") {
       let sumPct = 0;
@@ -160,9 +193,8 @@ export default function SharedExpensesPage() {
       isValid = Math.abs(diffPct) < 0.01;
 
       if (isValid) {
-        // Calculate shares
         let sumAssignedMinor = 0;
-        participants.forEach((p, idx) => {
+        participants.forEach((p) => {
           const key = `${p.type}:${p.id}`;
           const pct = parseFloat(customPercentages[key] || "0") || 0;
           const share = Math.round((totalMinor * pct) / 100);
@@ -170,7 +202,7 @@ export default function SharedExpensesPage() {
           sumAssignedMinor += share;
         });
 
-        // Rounding difference adjustment
+        // Rounding difference adjustment (last participant absorbs)
         const diffMinor = totalMinor - sumAssignedMinor;
         if (diffMinor !== 0 && count > 0) {
           const lastKey = `${participants[count - 1].type}:${participants[count - 1].id}`;
@@ -188,12 +220,11 @@ export default function SharedExpensesPage() {
 
   const { shareAmounts, isValid, detailsText, totalMinor } = getSplitState();
 
-  const handleCreateShared = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateShared = async () => {
     if (!isValid || !title || totalMinor <= 0) return;
 
-    setFormLoading(true);
-    setServerError(null);
+    setSubmitting(true);
+    setWizardError(null);
 
     const apiParticipants = activeParticipantsList().map((p) => {
       const key = `${p.type}:${p.id}`;
@@ -211,9 +242,10 @@ export default function SharedExpensesPage() {
       await api.post("/shared-expenses", {
         title,
         total_amount_minor: totalMinor,
-        currency: user?.currency || "INR",
+        currency: userCurrency,
         expense_date: expenseDate,
         category_id: category,
+        classification,
         payer_type: payerType,
         payer_id: payerId,
         participants: apiParticipants,
@@ -221,30 +253,52 @@ export default function SharedExpensesPage() {
         note: note || null,
       });
 
-      setShowAddModal(false);
+      setShowWizard(false);
+      setWizardStep(1);
       setTitle("");
       setTotalAmount("");
       setNote("");
       setSelectedFriends({});
       setCustomShares({});
       setCustomPercentages({});
-      fetchSharedExpenses();
+      fetchAllData();
     } catch (err: any) {
       console.error(err);
-      setServerError(err.response?.data?.detail || "Failed to create shared expense.");
+      setWizardError(err.response?.data?.detail || "Failed to create shared expense.");
     } finally {
-      setFormLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const toggleFriendSelection = (friendId: string) => {
-    setSelectedFriends((prev) => ({
-      ...prev,
-      [friendId]: !prev[friendId],
-    }));
+  const handleNextStep = () => {
+    if (wizardStep === 1) {
+      if (!title.trim() || !totalAmount.trim() || parseFloat(totalAmount) <= 0) {
+        setWizardError("Title and a valid total amount are required.");
+        return;
+      }
+    }
+    if (wizardStep === 2) {
+      if (activeParticipantsList().length === 0) {
+        setWizardError("You must select at least one participant.");
+        return;
+      }
+    }
+    setWizardError(null);
+    setWizardStep((curr) => curr + 1);
   };
 
-  const userCurrency = user?.currency || "INR";
+  const handlePrevStep = () => {
+    setWizardError(null);
+    setWizardStep((curr) => curr - 1);
+  };
+
+  const getPayerName = () => {
+    if (payerType === "USER") return "You";
+    const match = friends.find((f) => f.id === payerId);
+    return match ? match.name : "Unknown Friend";
+  };
+
+  const nonZeroBalances = balances.filter((b) => b.net_balance_minor !== 0);
 
   return (
     <div className="animate-fade-in">
@@ -252,327 +306,518 @@ export default function SharedExpensesPage() {
         <div>
           <h1 className="page-title">Shared Expenses</h1>
           <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: "4px" }}>
-            Split bills with group members and view debt ledgers.
+            Who owes whom, and why?
           </p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
+        <button onClick={() => setShowWizard(true)} className="btn btn-primary">
           ➕ Split Bill
         </button>
       </div>
 
-      {/* Shared Expenses Grid Log */}
-      <div className="card" style={{ padding: "var(--space-4)", overflowX: "auto" }}>
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
+      {/* ── Section 1: Outstanding Balances ── */}
+      <div className="card" style={{ padding: "var(--space-5)", marginBottom: "var(--space-6)" }}>
+        <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)", color: "var(--color-primary)" }}>
+          Outstanding Balances
+        </h2>
         {loading ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}>
-            <div style={{
-              width: "30px",
-              height: "30px",
-              border: "3px solid var(--color-border)",
-              borderTopColor: "var(--color-accent)",
-              borderRadius: "50%",
-              animation: "spin 0.8s linear infinite",
-            }} />
-          </div>
-        ) : sharedExpenses.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "40px 0", color: "var(--color-text-muted)" }}>
-            No shared expenses created yet.
-          </div>
+          <div style={{ padding: "10px 0" }}><LoadingSpinner size={24} /></div>
+        ) : nonZeroBalances.length === 0 ? (
+          <EmptyState icon="🤝" title="You're all settled" description="No outstanding balances with friends." />
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "var(--text-sm)" }}>
-            <thead>
-              <tr style={{ borderBottom: "2px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
-                <th style={{ padding: "var(--space-3) var(--space-2)" }}>Expense Title</th>
-                <th style={{ padding: "var(--space-3) var(--space-2)" }}>Date</th>
-                <th style={{ padding: "var(--space-3) var(--space-2)" }}>Payer</th>
-                <th style={{ padding: "var(--space-3) var(--space-2)" }}>Participants</th>
-                <th style={{ padding: "var(--space-3) var(--space-2)" }}>Split Method</th>
-                <th style={{ padding: "var(--space-3) var(--space-2)" }}>Status</th>
-                <th style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right" }}>Total Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sharedExpenses.map((item) => {
-                const payerName = item.payer_type === "USER"
-                  ? "You"
-                  : (friends.find(f => f.id === item.payer_id)?.name || "Unknown");
-                return (
-                  <tr key={item.id} style={{ borderBottom: "1px solid var(--color-border)" }} className="table-row">
-                    <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 600 }}>{item.title}</td>
-                    <td style={{ padding: "var(--space-3) var(--space-2)" }}>{item.expense_date}</td>
-                    <td style={{ padding: "var(--space-3) var(--space-2)" }}>{payerName}</td>
-                    <td style={{ padding: "var(--space-3) var(--space-2)" }}>
-                      {item.participants.length} people
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-2)", fontSize: "11px", fontWeight: 600 }}>
-                      {item.split_method.replace("_", " ")}
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-2)" }}>
-                      <span className={`badge ${
-                        item.status === "SETTLED" ? "badge-need" : "badge-dream"
-                      }`}>
-                        {item.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right", fontWeight: 600 }} className="amount">
-                      {formatMinor(item.total_amount_minor, item.currency)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            {nonZeroBalances.map((b) => {
+              const isOwed = b.net_balance_minor > 0;
+              return (
+                <div key={b.person_id} style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "var(--space-3) 0",
+                  borderBottom: "1px solid var(--color-border)",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+                    <div style={{
+                      width: "32px",
+                      height: "32px",
+                      borderRadius: "50%",
+                      backgroundColor: "var(--color-accent-light)",
+                      color: "var(--color-accent)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: 700,
+                      fontSize: "var(--text-xs)",
+                    }}>
+                      {b.person_name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>{b.person_name}</span>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)" }}>
+                      {isOwed ? "Owed to you" : "You owe"}
+                    </div>
+                    <span className="amount" style={{
+                      fontSize: "var(--text-base)",
+                      fontWeight: 700,
+                      color: isOwed ? "var(--color-success)" : "var(--color-danger)",
+                    }}>
+                      {formatMinor(Math.abs(b.net_balance_minor), b.currency)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
-      {/* Split Modal Form */}
-      {showAddModal && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          backgroundColor: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000,
-          padding: "var(--space-4)",
-        }}>
-          <div className="card animate-fade-in" style={{
-            width: "100%",
-            maxWidth: "520px",
-            maxHeight: "90vh",
-            overflowY: "auto",
-            padding: "var(--space-6)",
-            backgroundColor: "var(--color-surface)",
-            borderRadius: "var(--radius-lg)",
-          }}>
-            <h3 style={{ fontSize: "var(--text-lg)", fontWeight: 700, marginBottom: "var(--space-4)", color: "var(--color-primary)" }}>
-              Split a Bill
-            </h3>
-            <form onSubmit={handleCreateShared}>
-              {serverError && (
-                <div style={{
-                  backgroundColor: "var(--color-danger-bg)",
-                  color: "var(--color-danger)",
-                  padding: "var(--space-3)",
-                  borderRadius: "var(--radius-sm)",
-                  marginBottom: "var(--space-4)",
-                }}>
-                  {serverError}
-                </div>
-              )}
+      {/* ── Section 2: Recent Shared Expenses Log ── */}
+      <div className="card" style={{ padding: "var(--space-5)" }}>
+        <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)", color: "var(--color-primary)" }}>
+          Recent Shared Expenses
+        </h2>
+        {loading ? (
+          <LoadingSpinner centered />
+        ) : sharedExpenses.length === 0 ? (
+          <EmptyState icon="📋" title="No shared expenses yet" description="Start tracking bills split with your friends." actionLabel="Split Bill" onAction={() => setShowWizard(true)} />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "var(--text-sm)" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Title</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Date</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Paid By</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Split Details</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Split Method</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Status</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right" }}>Total Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sharedExpenses.map((item) => {
+                  const payerName = item.payer_type === "USER"
+                    ? "You"
+                    : (friends.find(f => f.id === item.payer_id)?.name || "Unknown");
+                  return (
+                    <tr key={item.id} style={{ borderBottom: "1px solid var(--color-border)" }} className="table-row">
+                      <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 600 }}>{item.title}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", color: "var(--color-text-secondary)" }}>{item.expense_date}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 500 }}>{payerName}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", color: "var(--color-text-secondary)" }}>
+                        {item.participants.length} participants
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", fontSize: "11px", fontWeight: 600, color: "var(--color-text-secondary)" }}>
+                        {item.split_method.replace("_", " ")}
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)" }}>
+                        <span className={`badge ${
+                          item.status === "SETTLED" ? "badge-need" : "badge-dream"
+                        }`}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right", fontWeight: 600 }} className="amount">
+                        {formatMinor(item.total_amount_minor, item.currency)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-              <div className="form-group">
-                <label className="form-label">Expense Title</label>
+      {/* ── 5-Step Shared Split Wizard Modal ── */}
+      <Modal
+        open={showWizard}
+        onClose={() => {
+          setShowWizard(false);
+          setWizardStep(1);
+          setWizardError(null);
+        }}
+        title={`Split Bill — Step ${wizardStep} of 5`}
+        footer={
+          <div style={{ display: "flex", gap: "var(--space-2)", width: "100%", justifyContent: "flex-end" }}>
+            {wizardStep > 1 && (
+              <button className="btn btn-secondary" onClick={handlePrevStep} disabled={submitting}>
+                ← Back
+              </button>
+            )}
+            {wizardStep < 5 ? (
+              <button className="btn btn-primary" onClick={handleNextStep}>
+                Next →
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={handleCreateShared} disabled={submitting || !isValid}>
+                {submitting ? "Splitting..." : "Split Expense"}
+              </button>
+            )}
+          </div>
+        }
+      >
+        {wizardError && <ErrorBanner message={wizardError} onDismiss={() => setWizardError(null)} />}
+
+        {/* STEP 1: Expense Details */}
+        {wizardStep === 1 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Expense Information</h3>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Expense Title</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Pizza dinner"
+                className="input"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Total Amount</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Cafe dinner"
-                  className="input"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="0.00"
+                  className="input input-amount"
+                  value={totalAmount}
+                  onChange={(e) => setTotalAmount(e.target.value)}
                 />
               </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
-                <div className="form-group">
-                  <label className="form-label">Total Amount</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="0.00"
-                    className="input input-amount"
-                    value={totalAmount}
-                    onChange={(e) => setTotalAmount(e.target.value)}
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Date</label>
-                  <input
-                    type="date"
-                    required
-                    className="input"
-                    value={expenseDate}
-                    onChange={(e) => setExpenseDate(e.target.value)}
-                  />
-                </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Date</label>
+                <input
+                  type="date"
+                  required
+                  className="input"
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                />
               </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
-                {/* Payer selection */}
-                <div className="form-group">
-                  <label className="form-label">Who Paid?</label>
-                  <select
-                    className="input"
-                    style={{ padding: "0 var(--space-2)" }}
-                    value={`${payerType}:${payerId}`}
-                    onChange={(e) => {
-                      const [type, id] = e.target.value.split(":");
-                      setPayerType(type as any);
-                      setPayerId(id);
-                    }}
-                  >
-                    <option value={`USER:${user?.id}`}>You (User)</option>
-                    {friends.map(f => (
-                      <option key={f.id} value={`FRIEND:${f.id}`}>{f.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Split Method</label>
-                  <select
-                    className="input"
-                    style={{ padding: "0 var(--space-2)" }}
-                    value={splitMethod}
-                    onChange={(e) => setSplitMethod(e.target.value as any)}
-                  >
-                    <option value="EQUAL">Split Equally</option>
-                    <option value="CUSTOM_AMOUNT">Custom Share Amounts</option>
-                    <option value="PERCENTAGE">Split by Percentage</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Participant Checklist Selector */}
-              <div className="form-group">
-                <label className="form-label">Select Participants</label>
-                <div style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "var(--space-2)",
-                  padding: "var(--space-3)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: "var(--radius-md)",
-                  backgroundColor: "var(--color-surface-2)",
-                  maxHeight: "100px",
-                  overflowY: "auto",
-                }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedUser}
-                      onChange={(e) => setSelectedUser(e.target.checked)}
-                    />
-                    You
-                  </label>
-                  {friends.filter(f => f.status === "ACTIVE").map((f) => (
-                    <label key={f.id} style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={!!selectedFriends[f.id]}
-                        onChange={() => toggleFriendSelection(f.id)}
-                      />
-                      {f.name}
-                    </label>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Category</label>
+                <select
+                  className="input"
+                  style={{ padding: "0 var(--space-2)" }}
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                >
+                  {CATEGORIES.map(c => (
+                    <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
                   ))}
-                </div>
+                </select>
               </div>
-
-              {/* Split Editor Section */}
-              <div style={{
-                marginTop: "var(--space-4)",
-                padding: "var(--space-4)",
-                backgroundColor: "var(--color-surface-2)",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--color-border)",
-              }}>
-                <h4 style={{ fontSize: "var(--text-sm)", fontWeight: 700, marginBottom: "var(--space-3)", color: "var(--color-primary)" }}>
-                  Split Share Editor
-                </h4>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", maxHeight: "160px", overflowY: "auto", paddingRight: "4px" }}>
-                  {activeParticipantsList().map((p) => {
-                    const key = `${p.type}:${p.id}`;
-                    return (
-                      <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)" }}>
-                        <span style={{ fontSize: "var(--text-sm)", fontWeight: 500 }}>{p.name}</span>
-
-                        {splitMethod === "EQUAL" && (
-                          <span className="amount" style={{ fontSize: "var(--text-sm)" }}>
-                            {formatMinor(shareAmounts[key] || 0, userCurrency)}
-                          </span>
-                        )}
-
-                        {splitMethod === "CUSTOM_AMOUNT" && (
-                          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)" }}>₹</span>
-                            <input
-                              type="text"
-                              placeholder="0.00"
-                              className="input input-amount"
-                              style={{ width: "90px", height: "30px", fontSize: "var(--text-sm)" }}
-                              value={customShares[key] || ""}
-                              onChange={(e) => {
-                                setCustomShares({ ...customShares, [key]: e.target.value });
-                              }}
-                            />
-                          </div>
-                        )}
-
-                        {splitMethod === "PERCENTAGE" && (
-                          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                            <input
-                              type="text"
-                              placeholder="0"
-                              className="input"
-                              style={{ width: "60px", height: "30px", textAlign: "right" }}
-                              value={customPercentages[key] || ""}
-                              onChange={(e) => {
-                                setCustomPercentages({ ...customPercentages, [key]: e.target.value });
-                              }}
-                            />
-                            <span style={{ fontSize: "var(--text-sm)" }}>%</span>
-                            <span className="amount" style={{ fontSize: "11px", color: "var(--color-text-secondary)", width: "70px", textAlign: "right" }}>
-                              ({formatMinor(shareAmounts[key] || 0, userCurrency)})
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Validation Indicator */}
-                <div style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  borderTop: "1px solid var(--color-border)",
-                  marginTop: "var(--space-3)",
-                  paddingTop: "var(--space-2)",
-                  fontSize: "var(--text-xs)",
-                  color: isValid ? "var(--color-success)" : "var(--color-danger)",
-                  fontWeight: 600,
-                }}>
-                  <span>{isValid ? "✅ Reconciled" : "⚠️ Unreconciled"}</span>
-                  <span>{detailsText}</span>
-                </div>
-              </div>
-
-              {/* Submit footer */}
-              <div style={{ display: "flex", gap: "var(--space-3)", justifyContent: "flex-end", marginTop: "var(--space-5)" }}>
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="btn btn-secondary"
-                  disabled={formLoading}
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Classification</label>
+                <select
+                  className="input"
+                  style={{ padding: "0 var(--space-2)" }}
+                  value={classification}
+                  onChange={(e) => setClassification(e.target.value as any)}
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={formLoading || !isValid}
-                >
-                  {formLoading ? "Submitting..." : "Split Expense"}
-                </button>
+                  <option value="NEED">Need</option>
+                  <option value="WANT">Want</option>
+                  <option value="DREAM">Dream</option>
+                </select>
               </div>
-            </form>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Note (optional)</label>
+              <textarea
+                className="input"
+                style={{ height: "60px", padding: "8px 12px", resize: "none" }}
+                placeholder="Add optional notes..."
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* STEP 2: Select Participants */}
+        {wizardStep === 2 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Select Group Members</h3>
+            <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", margin: 0 }}>Who is sharing this expense?</p>
+            <div style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "var(--space-2)",
+              padding: "var(--space-3)",
+              border: "1px solid var(--color-border)",
+              borderRadius: "var(--radius-md)",
+              backgroundColor: "var(--color-surface-2)",
+              maxHeight: "260px",
+              overflowY: "auto",
+            }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "8px", borderRadius: "var(--radius-sm)", cursor: "pointer", background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedUser}
+                  onChange={(e) => setSelectedUser(e.target.checked)}
+                  style={{ width: "16px", height: "16px" }}
+                />
+                <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>You (Myself)</span>
+              </label>
+              {friends.map((f) => (
+                <label key={f.id} style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "8px", borderRadius: "var(--radius-sm)", cursor: "pointer", background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!selectedFriends[f.id]}
+                    onChange={() => setSelectedFriends(prev => ({ ...prev, [f.id]: !prev[f.id] }))}
+                    style={{ width: "16px", height: "16px" }}
+                  />
+                  <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>{f.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3: Who paid? */}
+        {wizardStep === 3 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Who paid the bill?</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
+              <button
+                type="button"
+                onClick={() => setPayerType("USER")}
+                style={{
+                  padding: "var(--space-5) var(--space-4)",
+                  borderRadius: "var(--radius-md)",
+                  border: `2px solid ${payerType === "USER" ? "var(--color-accent)" : "var(--color-border)"}`,
+                  background: payerType === "USER" ? "var(--color-accent-light)" : "var(--color-surface)",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: "var(--text-base)",
+                  color: payerType === "USER" ? "var(--color-accent)" : "var(--color-text)",
+                  transition: "all var(--transition-fast)",
+                }}
+              >
+                🙋‍♂️ I paid
+              </button>
+              <button
+                type="button"
+                onClick={() => setPayerType("FRIEND")}
+                style={{
+                  padding: "var(--space-5) var(--space-4)",
+                  borderRadius: "var(--radius-md)",
+                  border: `2px solid ${payerType === "FRIEND" ? "var(--color-accent)" : "var(--color-border)"}`,
+                  background: payerType === "FRIEND" ? "var(--color-accent-light)" : "var(--color-surface)",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: "var(--text-base)",
+                  color: payerType === "FRIEND" ? "var(--color-accent)" : "var(--color-text)",
+                  transition: "all var(--transition-fast)",
+                }}
+              >
+                👥 A friend paid
+              </button>
+            </div>
+
+            {payerType === "FRIEND" && (
+              <div className="form-group" style={{ marginTop: "var(--space-2)" }}>
+                <label className="form-label">Select Payer Friend</label>
+                <select
+                  className="input"
+                  style={{ padding: "0 var(--space-3)" }}
+                  value={payerId}
+                  onChange={(e) => setPayerId(e.target.value)}
+                >
+                  {friends.filter(f => selectedFriends[f.id]).map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                  {/* Fallback to all friends if none are selected yet in step 2 */}
+                  {friends.filter(f => !selectedFriends[f.id]).map(f => (
+                    <option key={f.id} value={f.id}>{f.name} (not participant)</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* STEP 4: Split Editor */}
+        {wizardStep === 4 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Choose Split Method</h3>
+            
+            <div style={{ display: "flex", gap: "var(--space-2)" }}>
+              {(["EQUAL", "CUSTOM_AMOUNT", "PERCENTAGE"] as const).map((method) => (
+                <button
+                  key={method}
+                  type="button"
+                  onClick={() => setSplitMethod(method)}
+                  style={{
+                    flex: 1,
+                    padding: "var(--space-2) var(--space-1)",
+                    borderRadius: "var(--radius-sm)",
+                    border: `1.5px solid ${splitMethod === method ? "var(--color-accent)" : "var(--color-border)"}`,
+                    background: splitMethod === method ? "var(--color-accent-light)" : "var(--color-surface)",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: splitMethod === method ? "var(--color-accent)" : "var(--color-text-secondary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {method === "EQUAL" ? "Equally" : method === "CUSTOM_AMOUNT" ? "Amounts" : "Percentage"}
+                </button>
+              ))}
+            </div>
+
+            <div style={{
+              padding: "var(--space-4)",
+              backgroundColor: "var(--color-surface-2)",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--color-border)",
+            }}>
+              <h4 style={{ fontSize: "var(--text-sm)", fontWeight: 700, marginBottom: "var(--space-3)" }}>
+                Adjust Shares
+              </h4>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", maxHeight: "180px", overflowY: "auto" }}>
+                {activeParticipantsList().map((p) => {
+                  const key = `${p.type}:${p.id}`;
+                  return (
+                    <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)" }}>
+                      <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>{p.name}</span>
+
+                      {splitMethod === "EQUAL" && (
+                        <span className="amount" style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>
+                          {formatMinor(shareAmounts[key] || 0, userCurrency)}
+                        </span>
+                      )}
+
+                      {splitMethod === "CUSTOM_AMOUNT" && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)", fontWeight: 600 }}>{userCurrency === "INR" ? "₹" : "$"}</span>
+                          <input
+                            type="text"
+                            placeholder="0.00"
+                            className="input input-amount"
+                            style={{ width: "90px", height: "30px", fontSize: "var(--text-sm)" }}
+                            value={customShares[key] || ""}
+                            onChange={(e) => {
+                              setCustomShares({ ...customShares, [key]: e.target.value });
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {splitMethod === "PERCENTAGE" && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <input
+                            type="text"
+                            placeholder="0"
+                            className="input"
+                            style={{ width: "55px", height: "30px", textAlign: "right", fontSize: "var(--text-sm)" }}
+                            value={customPercentages[key] || ""}
+                            onChange={(e) => {
+                              setCustomPercentages({ ...customPercentages, [key]: e.target.value });
+                            }}
+                          />
+                          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>%</span>
+                          <span className="amount" style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", width: "75px", textAlign: "right" }}>
+                            ({formatMinor(shareAmounts[key] || 0, userCurrency)})
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Status footer */}
+              <div style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                borderTop: "1px solid var(--color-border)",
+                marginTop: "var(--space-3)",
+                paddingTop: "var(--space-2)",
+                fontSize: "var(--text-xs)",
+                color: isValid ? "var(--color-success)" : "var(--color-danger)",
+                fontWeight: 700,
+              }}>
+                <span>{isValid ? "✅ Reconciled" : "⚠️ Unreconciled"}</span>
+                <span>{detailsText}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 5: Review Split Summary */}
+        {wizardStep === 5 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+            <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Review Split Details</h3>
+
+            <div style={{
+              background: "var(--color-surface-2)",
+              borderRadius: "var(--radius-md)",
+              padding: "var(--space-4)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "var(--space-3)",
+              border: "1px solid var(--color-border)",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Title</span>
+                <span style={{ fontWeight: 700 }}>{title}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Payer</span>
+                <span style={{ fontWeight: 700 }}>{getPayerName()}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Total Amount</span>
+                <span className="amount" style={{ fontWeight: 700, fontSize: "var(--text-base)" }}>
+                  {formatMinor(totalMinor, userCurrency)}
+                </span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)" }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Split Method</span>
+                <span style={{ fontWeight: 700 }}>{splitMethod.replace("_", " ")}</span>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+              <span style={{ fontSize: "var(--text-xs)", fontWeight: 700, color: "var(--color-text-secondary)", textTransform: "uppercase" }}>Individual Shares</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                {activeParticipantsList().map((p) => {
+                  const key = `${p.type}:${p.id}`;
+                  return (
+                    <div key={key} style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--text-sm)", padding: "4px 0", borderBottom: "1px dashed var(--color-border)" }}>
+                      <span>{p.name}</span>
+                      <span className="amount" style={{ fontWeight: 600 }}>{formatMinor(shareAmounts[key] || 0, userCurrency)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "var(--text-xs)",
+              color: isValid ? "var(--color-success)" : "var(--color-danger)",
+              fontWeight: 700,
+              paddingTop: "var(--space-2)",
+            }}>
+              <span>Status: {isValid ? "Valid ✓" : "Invalid ✗"}</span>
+              {!isValid && <span>{detailsText}</span>}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <style jsx global>{`
         @media (max-width: 768px) {

@@ -3,138 +3,163 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { Modal } from "@/components/ui/Modal";
 
 export default function SettingsPage() {
-  const { user, updateUser } = useAuthStore();
-  const [name, setName] = useState(user?.name || "");
-  const [currency, setCurrency] = useState(user?.currency || "INR");
-  const [loading, setLoading] = useState(false);
+  const { user, updateUser, logout } = useAuthStore();
+
+  // Profile form
+  const [name, setName] = useState(user?.name ?? "");
+  const [currency, setCurrency] = useState(user?.currency ?? "INR");
+  const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Appearance
+  const [theme, setTheme] = useState<"light"|"dark">(() => {
+    if (typeof document !== "undefined") {
+      return (document.documentElement.getAttribute("data-theme") as "light"|"dark") ?? "light";
+    }
+    return "light";
+  });
+
+  // Logout confirm
+  const [showLogout, setShowLogout] = useState(false);
+
+  const handleTheme = (t: "light"|"dark") => {
+    setTheme(t);
+    document.documentElement.setAttribute("data-theme", t);
+    localStorage.setItem("suraty_theme", t);
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-
-    setLoading(true);
+    setSaving(true);
     setSuccess(false);
     setError(null);
-
     try {
-      const res = await api.patch("/auth/me", {
-        name: name.trim(),
-        currency,
-      });
-
-      updateUser({
-        name: res.data.name,
-        currency: res.data.currency,
-      });
-
+      const res = await api.patch("/auth/me", { name: name.trim(), currency });
+      updateUser({ name: res.data.name, currency: res.data.currency });
       setSuccess(true);
     } catch (err: any) {
-      console.error(err);
-      setError(err.response?.data?.detail || "Failed to update profile settings.");
+      setError(err.response?.data?.detail || "Unable to save settings. Please try again.");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   return (
-    <div className="animate-fade-in" style={{ maxWidth: "560px", margin: "0 auto" }}>
+    <div className="animate-fade-in" style={{ maxWidth: 600, margin: "0 auto" }}>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Profile Settings</h1>
-          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: "4px" }}>
-            Configure your personal profile and currency display preferences.
+          <h1 className="page-title">Settings</h1>
+          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: 2 }}>
+            Manage your profile and preferences
           </p>
         </div>
       </div>
 
-      <div className="card" style={{ padding: "var(--space-6)" }}>
-        <form onSubmit={handleSave}>
-          {success && (
-            <div style={{
-              backgroundColor: "var(--color-success-bg)",
-              color: "var(--color-success)",
-              padding: "var(--space-3)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "var(--text-sm)",
-              marginBottom: "var(--space-4)",
-              border: "1px solid var(--color-success)",
-            }}>
-              Settings saved successfully!
-            </div>
-          )}
+      {/* Profile section */}
+      <section className="card" style={{ padding: "var(--space-6)", marginBottom: "var(--space-5)" }}>
+        <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-5)" }}>Profile</h2>
 
-          {error && (
-            <div style={{
-              backgroundColor: "var(--color-danger-bg)",
-              color: "var(--color-danger)",
-              padding: "var(--space-3)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "var(--text-sm)",
-              marginBottom: "var(--space-4)",
-              border: "1px solid var(--color-danger)",
-            }}>
-              {error}
-            </div>
-          )}
-
-          <div className="form-group">
-            <label className="form-label">Email Address</label>
-            <input
-              type="email"
-              disabled
-              className="input"
-              value={user?.email || ""}
-              style={{ backgroundColor: "var(--color-surface-2)", color: "var(--color-text-muted)", cursor: "not-allowed" }}
-            />
-            <span style={{ fontSize: "10px", color: "var(--color-text-muted)", marginTop: "2px" }}>
-              Your email address is unique and cannot be changed.
-            </span>
+        {success && (
+          <div style={{
+            background: "var(--color-success-bg)", color: "var(--color-success)",
+            border: "1px solid var(--color-success)", borderRadius: "var(--radius-md)",
+            padding: "var(--space-3) var(--space-4)", fontSize: "var(--text-sm)",
+            marginBottom: "var(--space-4)",
+          }}>
+            ✓ Settings saved successfully.
           </div>
+        )}
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-          <div className="form-group">
-            <label className="form-label">Full Name</label>
-            <input
-              type="text"
-              required
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
+        <form onSubmit={handleSave} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="s-email">Email Address</label>
+            <input id="s-email" type="email" disabled className="input" value={user?.email ?? ""}
+              style={{ background: "var(--color-surface-2)", color: "var(--color-text-muted)", cursor: "not-allowed" }} />
+            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>Email cannot be changed.</span>
           </div>
-
-          <div className="form-group" style={{ marginBottom: "var(--space-6)" }}>
-            <label className="form-label">Default Currency</label>
-            <select
-              className="input"
-              style={{ padding: "0 var(--space-3)" }}
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-            >
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="s-name">Full Name</label>
+            <input id="s-name" className="input" required value={name} onChange={e => setName(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor="s-currency">Default Currency</label>
+            <select id="s-currency" className="input" value={currency} onChange={e => setCurrency(e.target.value)} style={{ padding: "0 var(--space-3)" }}>
               <option value="INR">INR (₹)</option>
               <option value="USD">USD ($)</option>
               <option value="EUR">EUR (€)</option>
               <option value="GBP">GBP (£)</option>
               <option value="JPY">JPY (¥)</option>
             </select>
-            <span style={{ fontSize: "10px", color: "var(--color-text-muted)", marginTop: "2px" }}>
-              This defines your primary currency display.
-            </span>
           </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={loading}
-            style={{ width: "100%" }}
-          >
-            {loading ? "Saving Settings..." : "Save Settings"}
+          <button type="submit" className="btn btn-primary" disabled={saving} style={{ alignSelf: "flex-start" }}>
+            {saving ? "Saving…" : "Save Profile"}
           </button>
         </form>
-      </div>
+      </section>
+
+      {/* Appearance section */}
+      <section className="card" style={{ padding: "var(--space-6)", marginBottom: "var(--space-5)" }}>
+        <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>Appearance</h2>
+        <div style={{ display: "flex", gap: "var(--space-3)" }}>
+          {(["light", "dark"] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => handleTheme(t)}
+              style={{
+                flex: 1,
+                padding: "var(--space-4)",
+                borderRadius: "var(--radius-md)",
+                border: `2px solid ${theme === t ? "var(--color-accent)" : "var(--color-border)"}`,
+                background: theme === t ? "var(--color-accent-light)" : "var(--color-surface-2)",
+                cursor: "pointer",
+                display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-2)",
+                transition: "all var(--transition-fast)",
+              }}
+              aria-pressed={theme === t}
+            >
+              <span style={{ fontSize: 24 }}>{t === "light" ? "☀️" : "🌙"}</span>
+              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: theme === t ? "var(--color-accent)" : "var(--color-text)" }}>
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Account section */}
+      <section className="card" style={{ padding: "var(--space-6)" }}>
+        <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>Account</h2>
+        <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", marginBottom: "var(--space-4)" }}>
+          Signed in as <strong>{user?.email}</strong>
+        </p>
+        <button className="btn btn-danger" onClick={() => setShowLogout(true)}>Sign Out</button>
+      </section>
+
+      {/* Logout Confirm */}
+      <Modal
+        open={showLogout}
+        onClose={() => setShowLogout(false)}
+        title="Sign Out"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowLogout(false)}>Cancel</button>
+            <button className="btn btn-danger" onClick={() => { logout(); window.location.href = "/login"; }}>
+              Yes, Sign Out
+            </button>
+          </>
+        }
+      >
+        <p style={{ fontSize: "var(--text-base)", color: "var(--color-text)" }}>
+          Are you sure you want to sign out of Suraty?
+        </p>
+      </Modal>
     </div>
   );
 }
