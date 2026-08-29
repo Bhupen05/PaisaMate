@@ -196,7 +196,11 @@ export default function SharedExpensesPage() {
       if (selectedFriendIds.length > 0) {
         setPayerId(selectedFriendIds[0]);
       } else {
-        setPayerId(activeFriends[0].id);
+        // Nobody was selected in Step 2 yet — default to the first friend
+        // and fold them into the split so the payer always has a share.
+        const fallbackId = activeFriends[0].id;
+        setPayerId(fallbackId);
+        setSelectedFriends(prev => ({ ...prev, [fallbackId]: true }));
       }
     }
   }, [payerType, activeFriends, selectedFriends, user]);
@@ -755,14 +759,24 @@ export default function SharedExpensesPage() {
                   className="input"
                   style={{ padding: "0 var(--space-3)" }}
                   value={payerId}
-                  onChange={(e) => setPayerId(e.target.value)}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setPayerId(id);
+                    // Picking someone as payer who wasn't selected as a
+                    // participant in Step 2 would otherwise front the whole
+                    // bill for a share of ₹0 — fold them into the split so
+                    // the payer is always someone actually splitting it.
+                    if (!selectedFriends[id]) {
+                      setSelectedFriends(prev => ({ ...prev, [id]: true }));
+                    }
+                  }}
                 >
                   {activeFriends.filter(f => selectedFriends[f.id]).map(f => (
                     <option key={f.id} value={f.id}>{f.name}</option>
                   ))}
-                  {/* Fallback to all active friends if none are selected yet in step 2 */}
+                  {/* Fallback to all active friends if none are selected yet in step 2 — picking one adds them to the split. */}
                   {activeFriends.filter(f => !selectedFriends[f.id]).map(f => (
-                    <option key={f.id} value={f.id}>{f.name} (not participant)</option>
+                    <option key={f.id} value={f.id}>{f.name} (adds to split)</option>
                   ))}
                 </select>
               </div>

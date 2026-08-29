@@ -1,5 +1,7 @@
 const STATUS_MAP: Record<string, { cls: string; label: string }> = {
   SETTLED: { cls: "badge-settled", label: "Settled" },
+  PARTIALLY_SETTLED: { cls: "badge-pending", label: "Partially Settled" },
+  UNSETTLED: { cls: "badge-paused", label: "Unsettled" },
   ACTIVE: { cls: "badge-active", label: "Active" },
   PENDING: { cls: "badge-pending", label: "Pending" },
   PAUSED: { cls: "badge-paused", label: "Paused" },

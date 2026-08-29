@@ -39,6 +39,21 @@ interface Friend {
   id: string;
   name: string;
   status: string;
+  linked_user_id: string | null;
+}
+
+/**
+ * Balance.person_id is a canonical identity: for a friend who's accepted
+ * their invite (linked to a real Suraty account), it's that account's user
+ * id, not this friend's document id in the caller's own /friends collection.
+ * POST /settlements requires the latter, so resolve back to it here —
+ * otherwise settling a linked friend's balance 404s as "Friend not found."
+ */
+function resolveFriendId(balancePersonId: string, friends: Friend[]): string | undefined {
+  const direct = friends.find(f => f.id === balancePersonId);
+  if (direct) return direct.id;
+  const linked = friends.find(f => f.linked_user_id === balancePersonId);
+  return linked?.id;
 }
 
 function directionLabel(direction: "I_PAID" | "THEY_PAID", friendName: string) {
@@ -190,7 +205,12 @@ export default function SettlementsPage() {
                             size="lg"
                           />
                           <button className="btn btn-secondary btn-sm" onClick={() => {
-                            setFriendId(b.person_id); setShowRecord(true); setStep("form");
+                            const resolvedId = resolveFriendId(b.person_id, friends);
+                            if (!resolvedId) {
+                              setError("Couldn't find that friend's record. Please refresh and try again.");
+                              return;
+                            }
+                            setFriendId(resolvedId); setShowRecord(true); setStep("form");
                             setDirection(status.isOwed ? "THEY_PAID" : "I_PAID");
                           }}>Settle</button>
                         </div>

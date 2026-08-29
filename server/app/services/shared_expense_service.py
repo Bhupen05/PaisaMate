@@ -26,6 +26,15 @@ async def _resolve_participant_linked_user_id(db, person_type: str, person_id: s
     return None
 
 
+def _real_user_id(person_type: str, person_id: str, linked_user_id: str | None) -> str | None:
+    """The real Suraty account id this participant resolves to, if any — a
+    direct USER row already is that id, a linked FRIEND row resolves via
+    linked_user_id, and an unlinked contact has no account at all."""
+    if person_type == "USER":
+        return person_id
+    return linked_user_id
+
+
 async def _resolve_person_name(db, person_type: str, person_id: str, linked_user_id: str | None = None) -> str:
     if linked_user_id:
         user = await db.users.find_one({"_id": ObjectId(linked_user_id)})
@@ -192,10 +201,10 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
     shared_id = shared_result.inserted_id
 
     participant_docs = []
+    payer_included = False
     for p in data.participants:
-        paid = data.total_amount_minor if (
-            p.person_type == data.payer_type and p.person_id == data.payer_id
-        ) else 0
+        is_payer = p.person_type == data.payer_type and p.person_id == data.payer_id
+        payer_included = payer_included or is_payer
         linked_user_id = await _resolve_participant_linked_user_id(db, p.person_type.value, p.person_id)
         participant_docs.append({
             "shared_expense_id": shared_id,
@@ -204,9 +213,57 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
             "linked_user_id": linked_user_id,
             "share_amount_minor": p.share_amount_minor or 0,
             "share_percentage": p.share_percentage,
-            "paid_amount_minor": paid,
+            "paid_amount_minor": data.total_amount_minor if is_payer else 0,
             "settled_amount_minor": 0,
         })
+
+    # The payer isn't required to be one of the people splitting the bill —
+    # they may have fronted the whole amount without owing a share. Track
+    # them as a zero-share participant anyway so balance calculation (which
+    # finds "the payer" by scanning paid_amount_minor) never silently drops
+    # the whole expense when that happens.
+    if not payer_included:
+        payer_linked_user_id = await _resolve_participant_linked_user_id(
+            db, data.payer_type.value, data.payer_id
+        )
+        participant_docs.append({
+            "shared_expense_id": shared_id,
+            "person_type": data.payer_type.value,
+            "person_id": data.payer_id,
+            "linked_user_id": payer_linked_user_id,
+            "share_amount_minor": 0,
+            "share_percentage": None,
+            "paid_amount_minor": data.total_amount_minor,
+            "settled_amount_minor": 0,
+        })
+
+    # Give every OTHER real account holder among the participants (a direct
+    # USER row, or a FRIEND row linked to an accepted Suraty account) their
+    # own personal ledger entry for their share — otherwise their Dashboard
+    # and Analytics totals silently omit money they've actually committed to.
+    for doc in participant_docs:
+        real_uid = _real_user_id(doc["person_type"], doc["person_id"], doc["linked_user_id"])
+        if real_uid is None:
+            doc["personal_expense_id"] = None
+        elif real_uid == user_id:
+            doc["personal_expense_id"] = expense_result.inserted_id
+        else:
+            participant_expense_doc = {
+                "owner_user_id": ObjectId(real_uid),
+                "title": data.title,
+                "amount_minor": doc["share_amount_minor"],
+                "currency": data.currency,
+                "expense_date": data.expense_date.isoformat(),
+                "category_id": data.category_id,
+                "classification": data.classification.value,
+                "expense_type": ExpenseType.SHARED.value,
+                "note": data.note,
+                "created_at": now,
+                "updated_at": now,
+            }
+            result = await db.expenses.insert_one(participant_expense_doc)
+            doc["personal_expense_id"] = result.inserted_id
+
     if participant_docs:
         await db.shared_participants.insert_many(participant_docs)
 
@@ -218,13 +275,34 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
 async def get_shared_expenses(user_id: str, friend_id: str | None = None) -> list[SharedExpenseResponse]:
     db = get_database()
     if friend_id:
-        # Filtering to a specific friend is always done from the caller's
-        # own friends list, so this stays scoped to expenses they own.
+        # Expenses I created with this friend (by their doc id in my own
+        # friends list) as a participant.
         participant_cursor = db.shared_participants.find(
             {"person_type": "FRIEND", "person_id": friend_id}, {"shared_expense_id": 1}
         )
         shared_ids = [p["shared_expense_id"] async for p in participant_cursor]
-        query: dict = {"owner_user_id": ObjectId(user_id), "_id": {"$in": shared_ids}}
+        mine_query: dict = {"owner_user_id": ObjectId(user_id), "_id": {"$in": shared_ids}}
+
+        # If this friend has an accepted/linked account, also surface
+        # expenses THEY created where I'm the linked participant — otherwise
+        # half of a friend's shared history (whichever half they, not me,
+        # created) would silently be missing from this filtered view.
+        friend_doc = await db.friends.find_one(
+            {"_id": ObjectId(friend_id), "owner_user_id": ObjectId(user_id)}
+        )
+        friend_real_uid = friend_doc.get("linked_user_id") if friend_doc else None
+        if friend_real_uid:
+            mine_participant_cursor = db.shared_participants.find(
+                {"linked_user_id": user_id}, {"shared_expense_id": 1}
+            )
+            their_candidate_ids = [p["shared_expense_id"] async for p in mine_participant_cursor]
+            theirs_query = {
+                "owner_user_id": ObjectId(friend_real_uid),
+                "_id": {"$in": their_candidate_ids},
+            }
+            query: dict = {"$or": [mine_query, theirs_query]}
+        else:
+            query = mine_query
     else:
         # Also surface expenses someone else created where I'm a linked
         # participant — otherwise only the creator ever sees a shared expense.
@@ -309,12 +387,20 @@ async def update_shared_expense(
         }},
     )
 
+    # Snapshot the old participant rows before wiping them, so each linked
+    # participant's personal ledger entry can be reused/updated in place (or
+    # cleaned up if they were dropped from the split) instead of orphaned.
+    old_participants = await db.shared_participants.find(
+        {"shared_expense_id": existing["_id"]}
+    ).to_list(length=100)
+    old_by_key = {f"{p['person_type']}:{p['person_id']}": p for p in old_participants}
+
     await db.shared_participants.delete_many({"shared_expense_id": existing["_id"]})
     participant_docs = []
+    payer_included = False
     for p in data.participants:
-        paid = data.total_amount_minor if (
-            p.person_type == data.payer_type and p.person_id == data.payer_id
-        ) else 0
+        is_payer = p.person_type == data.payer_type and p.person_id == data.payer_id
+        payer_included = payer_included or is_payer
         linked_user_id = await _resolve_participant_linked_user_id(db, p.person_type.value, p.person_id)
         participant_docs.append({
             "shared_expense_id": existing["_id"],
@@ -323,9 +409,69 @@ async def update_shared_expense(
             "linked_user_id": linked_user_id,
             "share_amount_minor": p.share_amount_minor or 0,
             "share_percentage": p.share_percentage,
-            "paid_amount_minor": paid,
+            "paid_amount_minor": data.total_amount_minor if is_payer else 0,
             "settled_amount_minor": 0,
         })
+
+    # Same payer-without-a-share safety net as create_shared_expense.
+    if not payer_included:
+        payer_linked_user_id = await _resolve_participant_linked_user_id(
+            db, data.payer_type.value, data.payer_id
+        )
+        participant_docs.append({
+            "shared_expense_id": existing["_id"],
+            "person_type": data.payer_type.value,
+            "person_id": data.payer_id,
+            "linked_user_id": payer_linked_user_id,
+            "share_amount_minor": 0,
+            "share_percentage": None,
+            "paid_amount_minor": data.total_amount_minor,
+            "settled_amount_minor": 0,
+        })
+
+    new_keys = set()
+    for doc in participant_docs:
+        key = f"{doc['person_type']}:{doc['person_id']}"
+        new_keys.add(key)
+        real_uid = _real_user_id(doc["person_type"], doc["person_id"], doc["linked_user_id"])
+        if real_uid is None:
+            doc["personal_expense_id"] = None
+            continue
+        if real_uid == user_id:
+            doc["personal_expense_id"] = existing["expense_id"]
+            continue
+        participant_expense_fields = {
+            "title": data.title,
+            "amount_minor": doc["share_amount_minor"],
+            "currency": data.currency,
+            "expense_date": data.expense_date.isoformat(),
+            "category_id": data.category_id,
+            "classification": data.classification.value,
+            "note": data.note,
+            "updated_at": now,
+        }
+        old = old_by_key.get(key)
+        old_expense_id = old.get("personal_expense_id") if old else None
+        if old_expense_id:
+            await db.expenses.update_one({"_id": old_expense_id}, {"$set": participant_expense_fields})
+            doc["personal_expense_id"] = old_expense_id
+        else:
+            result = await db.expenses.insert_one({
+                "owner_user_id": ObjectId(real_uid),
+                "expense_type": ExpenseType.SHARED.value,
+                "created_at": now,
+                **participant_expense_fields,
+            })
+            doc["personal_expense_id"] = result.inserted_id
+
+    # Drop personal ledger entries for anyone who was removed from the split.
+    for key, old in old_by_key.items():
+        if key in new_keys:
+            continue
+        old_expense_id = old.get("personal_expense_id")
+        if old_expense_id and old_expense_id != existing["expense_id"]:
+            await db.expenses.delete_one({"_id": old_expense_id})
+
     if participant_docs:
         await db.shared_participants.insert_many(participant_docs)
 
@@ -343,6 +489,11 @@ async def delete_shared_expense(user_id: str, shared_id: str) -> None:
     )
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared expense not found.")
+    participants = await db.shared_participants.find({"shared_expense_id": doc["_id"]}).to_list(length=100)
+    for p in participants:
+        personal_expense_id = p.get("personal_expense_id")
+        if personal_expense_id and personal_expense_id != doc["expense_id"]:
+            await db.expenses.delete_one({"_id": personal_expense_id})
     await db.shared_participants.delete_many({"shared_expense_id": doc["_id"]})
     await db.expenses.delete_one({"_id": doc["expense_id"], "owner_user_id": ObjectId(user_id)})
     await db.shared_expenses.delete_one({"_id": doc["_id"]})

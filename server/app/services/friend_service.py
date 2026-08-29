@@ -148,7 +148,12 @@ async def get_friends(user_id: str, include_archived: bool = False) -> list[Frie
     cursor = db.friends.find(query).sort("name", 1)
     docs = await cursor.to_list(length=500)
     balances = await get_balances(user_id)
-    balance_map = {f"{b.person_type}:{b.person_id}": (b.net_balance_minor, b.currency) for b in balances}
+    # b.person_type is a PersonType enum member, not a plain str — an
+    # f-string renders it as "PersonType.USER" instead of "USER", so this
+    # must use .value to match the plain "USER"/"FRIEND" keys _balance_key
+    # produces below (that mismatch used to make every friend's balance
+    # silently fall back to 0, regardless of their real balance).
+    balance_map = {f"{b.person_type.value}:{b.person_id}": (b.net_balance_minor, b.currency) for b in balances}
     outgoing = [
         _doc_to_response(d, *balance_map.get(_balance_key(d, str(d["_id"])), (0, "INR")))
         for d in docs
@@ -186,7 +191,7 @@ async def get_friend(user_id: str, friend_id: str) -> FriendResponse:
     balances = await get_balances(user_id)
     key = _balance_key(doc, friend_id)
     net_balance_minor, currency = next(
-        ((b.net_balance_minor, b.currency) for b in balances if f"{b.person_type}:{b.person_id}" == key),
+        ((b.net_balance_minor, b.currency) for b in balances if f"{b.person_type.value}:{b.person_id}" == key),
         (0, "INR"),
     )
     return _doc_to_response(doc, net_balance_minor, currency)
