@@ -31,6 +31,8 @@ import {
   Check,
   Send,
   Clock,
+  Mail,
+  UserCheck,
 } from "lucide-react";
 
 interface Friend {
@@ -46,6 +48,7 @@ interface Friend {
   accepted_at: string | null;
   net_balance_minor: number;
   currency: string;
+  direction: "outgoing" | "incoming";
 }
 
 interface Activity {
@@ -102,7 +105,9 @@ export default function FriendsPage() {
     // toggle below filters client-side instead of re-fetching.
     queryFn: async () => (await api.get<Friend[]>("/friends?include_archived=true")).data ?? [],
   });
-  const friends = friendsQuery.data ?? [];
+  const allFriends = friendsQuery.data ?? [];
+  const incomingInvites = allFriends.filter(f => f.direction === "incoming");
+  const friends = allFriends.filter(f => f.direction !== "incoming");
   const loading = friendsQuery.isPending;
   const selected = friends.find(f => f.id === selectedId) ?? null;
 
@@ -174,6 +179,18 @@ export default function FriendsPage() {
       }
     },
     onError: () => setError("Unable to resend invite. Please try again."),
+  });
+
+  const acceptMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/friends/${id}/accept`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["friends"] }),
+    onError: () => setError("Unable to accept invite. Please try again."),
+  });
+
+  const declineMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/friends/${id}/decline`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["friends"] }),
+    onError: () => setError("Unable to decline invite. Please try again."),
   });
 
   const submitting = saveMutation.isPending || deleteMutation.isPending;
@@ -283,6 +300,49 @@ export default function FriendsPage() {
         />
       )}
 
+      {incomingInvites.length > 0 && (
+        <div className="card" style={{ padding: "var(--space-4)", marginBottom: "var(--space-6)", borderColor: "var(--color-accent)" }}>
+          <h2 style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-accent)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "var(--space-3)" }}>
+            <Mail size={15} /> Invites Received ({incomingInvites.length})
+          </h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            {incomingInvites.map(inv => (
+              <div key={inv.id} style={{
+                display: "flex", alignItems: "center", gap: "var(--space-3)",
+                padding: "var(--space-3)", borderRadius: "var(--radius-md)",
+                background: "var(--color-surface-2)", flexWrap: "wrap",
+              }}>
+                <Avatar name={inv.name} size={36} />
+                <div style={{ flex: 1, minWidth: 160 }}>
+                  <div style={{ fontWeight: 700, fontSize: "var(--text-sm)" }}>{inv.name}</div>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                    Wants to split expenses with you{inv.invited_at ? ` · ${formatDate(inv.invited_at)}` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => declineMutation.mutate(inv.id)}
+                    disabled={declineMutation.isPending || acceptMutation.isPending}
+                    title="Decline invite"
+                  >
+                    Decline
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => acceptMutation.mutate(inv.id)}
+                    disabled={declineMutation.isPending || acceptMutation.isPending}
+                    title="Accept invite"
+                  >
+                    <UserCheck size={14} /> Accept
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: selected ? "340px 1fr" : "1fr", gap: "var(--space-6)", alignItems: "start" }} className="friends-grid">
         {/* Friend List */}
         <div>
@@ -338,21 +398,21 @@ export default function FriendsPage() {
                         )}
                       </div>
                       {/* Actions */}
-                      <div style={{ display: "flex", gap: "var(--space-1)", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                      <div style={{ display: "flex", gap: "var(--space-2)", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                         {isPending ? (
                           <>
-                            <button className="btn btn-ghost btn-sm" onClick={() => copyInviteLink(f)} aria-label="Copy invite link">
+                            <button className="btn btn-ghost btn-sm" onClick={() => copyInviteLink(f)} aria-label="Copy invite link" title="Copy invite link">
                               {copiedId === f.id ? <Check size={14} /> : <Copy size={14} />}
                             </button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => resendMutation.mutate(f.id)} aria-label="Resend invite" disabled={resendMutation.isPending}><Send size={14} /></button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => resendMutation.mutate(f.id)} aria-label="Resend invite" title="Resend invite" disabled={resendMutation.isPending}><Send size={14} /></button>
                           </>
                         ) : (
-                          <button className="btn btn-ghost btn-sm" onClick={() => toggleArchive(f)} aria-label={f.is_archived ? "Unarchive" : "Archive"}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => toggleArchive(f)} aria-label={f.is_archived ? "Unarchive" : "Archive"} title={f.is_archived ? "Unarchive" : "Archive"}>
                             {f.is_archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
                           </button>
                         )}
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(f)} aria-label={`Edit ${f.name}`}><Pencil size={14} /></button>
-                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(f)} aria-label={isPending ? "Cancel invite" : `Remove ${f.name}`}><Trash2 size={14} /></button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(f)} aria-label={`Edit ${f.name}`} title="Edit"><Pencil size={14} /></button>
+                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(f)} aria-label={isPending ? "Cancel invite" : `Remove ${f.name}`} title={isPending ? "Cancel invite" : "Remove"}><Trash2 size={14} /></button>
                       </div>
                     </div>
                   </div>

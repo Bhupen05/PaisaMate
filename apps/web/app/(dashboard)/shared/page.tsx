@@ -84,6 +84,8 @@ interface ParticipantResponse {
   id: string;
   person_id: string;
   person_type: "USER" | "FRIEND";
+  person_name: string;
+  linked_user_id: string | null;
   share_amount_minor: number;
   share_percentage: number | null;
   paid_amount_minor: number;
@@ -101,10 +103,13 @@ interface SharedExpense {
   classification: "NEED" | "WANT" | "DREAM";
   payer_type: "USER" | "FRIEND";
   payer_id: string;
+  payer_name: string;
+  owner_name: string;
   split_method: "EQUAL" | "CUSTOM_AMOUNT" | "PERCENTAGE";
   status: string;
   note: string | null;
   participants: ParticipantResponse[];
+  is_owner: boolean;
 }
 
 interface Balance {
@@ -521,17 +526,23 @@ export default function SharedExpensesPage() {
               </thead>
               <tbody>
                 {sharedExpenses.map((item) => {
-                  const payerName = item.payer_type === "USER"
-                    ? "You"
-                    : (friends.find(f => f.id === item.payer_id)?.name || "Unknown");
                   return (
                     <tr key={item.id} style={{ borderBottom: "1px solid var(--color-border)" }} className="table-row">
-                      <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 600 }}>{item.title}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 600 }}>
+                        {item.title}
+                        {!item.is_owner && (
+                          <span style={{
+                            marginLeft: "var(--space-2)", fontSize: "var(--text-xs)", fontWeight: 600,
+                            color: "var(--color-text-muted)", background: "var(--color-surface-2)",
+                            padding: "1px 6px", borderRadius: "var(--radius-sm)", verticalAlign: "middle",
+                          }}>Shared with you</span>
+                        )}
+                      </td>
                       <td style={{ padding: "var(--space-3) var(--space-2)", color: "var(--color-text-secondary)" }}>{item.expense_date}</td>
                       <td style={{ padding: "var(--space-3) var(--space-2)" }}>
                         <ClassificationBadge value={item.classification} />
                       </td>
-                      <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 500 }}>{payerName}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 500 }}>{item.payer_name}</td>
                       <td style={{ padding: "var(--space-3) var(--space-2)", color: "var(--color-text-secondary)" }}>
                         {item.participants.length} participants · {item.split_method.replace("_", " ")}
                       </td>
@@ -545,10 +556,16 @@ export default function SharedExpensesPage() {
                         {formatMinor(item.total_amount_minor, item.currency)}
                       </td>
                       <td style={{ padding: "var(--space-3) var(--space-2)", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
-                          <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)} aria-label={`Edit ${item.title}`}><Pencil size={13} /> Edit</button>
-                          <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(item)} aria-label={`Delete ${item.title}`}><Trash2 size={13} /> Delete</button>
-                        </div>
+                        {item.is_owner ? (
+                          <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)} aria-label={`Edit ${item.title}`} title="Edit"><Pencil size={13} /> Edit</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(item)} aria-label={`Delete ${item.title}`} title="Delete"><Trash2 size={13} /> Delete</button>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: "right", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                            Added by {item.owner_name}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -941,14 +958,6 @@ export default function SharedExpensesPage() {
         </p>
         <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginTop: "var(--space-2)" }}>This action cannot be undone.</p>
       </Modal>
-
-      <style jsx global>{`
-        @media (max-width: 768px) {
-          .friends-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }

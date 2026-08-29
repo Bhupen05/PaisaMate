@@ -61,3 +61,22 @@
  GET /dashboard 200 in 147ms
  GET /friends 200 in 488ms
  GET /friends 200 in 91ms
+ GET /friends 200 in 192ms
+ GET /friends 200 in 80ms
+ ✓ Compiled in 1495ms (2149 modules)
+ ✓ Compiled in 630ms (2149 modules)
+ ✓ Compiled in 424ms (2149 modules)
+ ✓ Compiled in 516ms (2149 modules)
+ ✓ Compiled in 449ms (2149 modules)
+ ✓ Compiled in 908ms (2149 modules)
+ ✓ Compiled in 495ms (2149 modules)
+ ✓ Compiled in 447ms (2149 modules)
+ ✓ Compiled in 941ms (2153 modules)
+ ✓ Compiled in 511ms (2153 modules)
+ ○ Compiling / ...
+ ✓ Compiled / in 1087ms (2160 modules)
+ GET / 200 in 1540ms
+ GET /friends 200 in 160ms
+ GET / 200 in 47ms
+ GET /friends 200 in 52ms
+ GET /shared 200 in 66ms

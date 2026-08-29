@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -35,6 +36,9 @@ class FriendResponse(BaseModel):
     linked_user_id: str | None
     net_balance_minor: int
     currency: str
+    # "outgoing" = an invite/friend I added; "incoming" = someone else's
+    # pending invite addressed to me, surfaced so I can accept/decline it.
+    direction: Literal["outgoing", "incoming"] = "outgoing"
     created_at: datetime
     updated_at: datetime
 

@@ -49,6 +49,12 @@ class ParticipantResponse(BaseModel):
     shared_expense_id: str
     person_type: PersonType
     person_id: str
+    person_name: str
+    # The real account behind this participant, when person_type is FRIEND
+    # and that friend has accepted their invite — lets the other side of the
+    # split resolve "which row is me" regardless of whose friends-list the
+    # FRIEND id was drawn from.
+    linked_user_id: str | None = None
     share_amount_minor: int
     share_percentage: float | None
     paid_amount_minor: int
@@ -59,6 +65,7 @@ class SharedExpenseResponse(BaseModel):
     id: str
     expense_id: str
     owner_user_id: str
+    owner_name: str
     title: str
     total_amount_minor: int
     your_share_minor: int
@@ -68,10 +75,14 @@ class SharedExpenseResponse(BaseModel):
     classification: Classification
     payer_type: PersonType
     payer_id: str
+    payer_name: str
     split_method: SplitMethod
     status: SettlementStatus
     note: str | None
     participants: list[ParticipantResponse]
+    # False when the caller is only a participant, not the creator — the
+    # frontend uses this to hide Edit/Delete for expenses they don't own.
+    is_owner: bool
     created_at: datetime
     updated_at: datetime
 

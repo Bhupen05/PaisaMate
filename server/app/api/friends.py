@@ -58,6 +58,17 @@ async def resend_invite(friend_id: str, user_id: str = Depends(get_current_user_
     return await friend_service.resend_invite(user_id, friend_id)
 
 
+@router.post("/{friend_id}/accept", response_model=FriendResponse)
+async def accept_invite_by_id(friend_id: str, user_id: str = Depends(get_current_user_id)):
+    return await friend_service.accept_invite_by_id(user_id, friend_id)
+
+
+@router.post("/{friend_id}/decline", response_model=MessageResponse)
+async def decline_invite(friend_id: str, user_id: str = Depends(get_current_user_id)):
+    await friend_service.decline_invite(user_id, friend_id)
+    return MessageResponse(message="Invite declined.")
+
+
 @router.post("/{friend_id}/archive", response_model=FriendResponse)
 async def archive_friend(friend_id: str, user_id: str = Depends(get_current_user_id)):
     return await friend_service.archive_friend(user_id, friend_id)
