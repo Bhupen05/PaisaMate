@@ -45,3 +45,19 @@
  ○ Compiling /favicon.ico ...
  ✓ Compiled /favicon.ico in 1481ms (1238 modules)
  GET /favicon.ico 200 in 1748ms
+ GET /dashboard 200 in 212ms
+ ✓ Compiled in 2.2s (2149 modules)
+ ✓ Compiled in 525ms (2149 modules)
+ ✓ Compiled in 368ms (2149 modules)
+ ✓ Compiled in 945ms (2149 modules)
+ ✓ Compiled in 1476ms (2149 modules)
+ ✓ Compiled in 504ms (2149 modules)
+ GET /friends 200 in 832ms
+ GET /dashboard 200 in 609ms
+ ○ Compiling /favicon.ico ...
+ ✓ Compiled /favicon.ico in 1160ms (1209 modules)
+ GET /favicon.ico 200 in 1569ms
+ GET /friends 200 in 202ms
+ GET /dashboard 200 in 147ms
+ GET /friends 200 in 488ms
+ GET /friends 200 in 91ms

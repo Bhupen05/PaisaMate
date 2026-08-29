@@ -82,6 +82,7 @@ export default function FriendsPage() {
 
   // Modals
   const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
   const [editTarget, setEditTarget] = useState<Friend | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Friend | null>(null);
   const [fname, setFname] = useState("");
@@ -129,7 +130,7 @@ export default function FriendsPage() {
   const activity = activityQuery.data ?? [];
   const activityLoading = activityQuery.isPending && !!selectedId && selected?.status === "ACTIVE";
 
-  const openInvite = () => { setFname(""); setFemail(""); setFphone(""); setFormError(null); setShowInvite(true); };
+  const openInvite = () => { setInviteEmail(""); setFormError(null); setShowInvite(true); };
   const openEdit = (f: Friend) => { setEditTarget(f); setFname(f.name); setFemail(f.email ?? ""); setFphone(f.phone ?? ""); setFormError(null); };
 
   const saveMutation = useMutation({
@@ -177,10 +178,16 @@ export default function FriendsPage() {
 
   const submitting = saveMutation.isPending || deleteMutation.isPending;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleInviteSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim()) { setFormError("Email is required — we use it to find their Suraty account."); return; }
+    setFormError(null);
+    saveMutation.mutate({ email: inviteEmail.trim() });
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!fname.trim()) { setFormError("Name is required."); return; }
-    if (!editTarget && !femail.trim()) { setFormError("Email is required — we use it to find their Suraty account."); return; }
     setFormError(null);
     saveMutation.mutate({ name: fname.trim(), email: femail.trim() || undefined, phone: fphone || undefined });
   };
@@ -205,22 +212,32 @@ export default function FriendsPage() {
   const visible = friends.filter(f => showArchived ? f.is_archived : !f.is_archived);
   const isPendingDelete = deleteTarget?.status === "PENDING";
 
-  const FormFields = (
+  const InviteFormFields = (
     <>
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {!editTarget && (
-        <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", margin: "0 0 var(--space-1)" }}>
-          They need an existing Suraty account — we'll look them up by email and generate a link for them to accept.
-        </p>
-      )}
-      <form id="friend-form" onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", margin: "0 0 var(--space-1)" }}>
+        They need an existing Suraty account — enter their email and we'll generate a link for them to accept. Their name comes from their account.
+      </p>
+      <form id="invite-form" onSubmit={handleInviteSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label" htmlFor="inv-email">Email *</label>
+          <input id="inv-email" className={`input ${formError && !inviteEmail.trim() ? "error" : ""}`} type="email" required value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="rohan@example.com" />
+        </div>
+      </form>
+    </>
+  );
+
+  const EditFormFields = (
+    <>
+      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      <form id="friend-form" onSubmit={handleEditSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label" htmlFor="f-name">Full Name *</label>
           <input id="f-name" className={`input ${formError && !fname.trim() ? "error" : ""}`} required value={fname} onChange={e => setFname(e.target.value)} placeholder="Rohan Sharma" />
         </div>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label" htmlFor="f-email">{editTarget ? "Email (optional)" : "Email *"}</label>
-          <input id="f-email" className={`input ${formError && !editTarget && !femail.trim() ? "error" : ""}`} type="email" required={!editTarget} value={femail} onChange={e => setFemail(e.target.value)} placeholder="rohan@example.com" />
+          <label className="form-label" htmlFor="f-email">Email (optional)</label>
+          <input id="f-email" className="input" type="email" value={femail} onChange={e => setFemail(e.target.value)} placeholder="rohan@example.com" />
         </div>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label" htmlFor="f-phone">Phone (optional)</label>
@@ -451,14 +468,14 @@ export default function FriendsPage() {
 
       {/* Invite Modal */}
       <Modal open={showInvite} onClose={() => setShowInvite(false)} title="Invite a Friend"
-        footer={<><button className="btn btn-secondary" onClick={() => setShowInvite(false)}>Cancel</button><button className="btn btn-primary" form="friend-form" type="submit" disabled={submitting}>{submitting ? "Sending…" : "Send Invite"}</button></>}>
-        {FormFields}
+        footer={<><button className="btn btn-secondary" onClick={() => setShowInvite(false)}>Cancel</button><button className="btn btn-primary" form="invite-form" type="submit" disabled={submitting}>{submitting ? "Sending…" : "Send Invite"}</button></>}>
+        {InviteFormFields}
       </Modal>
 
       {/* Edit Modal */}
       <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Friend"
         footer={<><button className="btn btn-secondary" onClick={() => setEditTarget(null)}>Cancel</button><button className="btn btn-primary" form="friend-form" type="submit" disabled={submitting}>{submitting ? "Saving…" : "Save Changes"}</button></>}>
-        {FormFields}
+        {EditFormFields}
       </Modal>
 
       {/* Delete/Cancel Confirm */}

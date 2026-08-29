@@ -6,11 +6,10 @@ from app.models.common import FriendStatus
 
 
 class FriendInvite(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    # Required — used to look up an existing Suraty account to invite.
+    # The only input needed — used to look up an existing Suraty account to
+    # invite. The friend's display name is taken from that account, not typed
+    # by the inviter.
     email: EmailStr
-    phone: str | None = Field(default=None, max_length=20)
-    avatar: str | None = None
 
 
 class FriendUpdate(BaseModel):

@@ -72,10 +72,10 @@ async def invite_friend(user_id: str, data: FriendInvite) -> FriendResponse:
     now = datetime.now(timezone.utc)
     doc = {
         "owner_user_id": ObjectId(user_id),
-        "name": data.name,
+        "name": target_user["name"],
         "email": data.email,
-        "phone": data.phone,
-        "avatar": data.avatar,
+        "phone": None,
+        "avatar": None,
         "status": FriendStatus.PENDING.value,
         "invite_token": _generate_invite_token(),
         "invited_at": now,
