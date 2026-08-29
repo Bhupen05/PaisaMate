@@ -1,7 +1,7 @@
 "use client";
 
 interface EmptyStateProps {
-  icon?: string;
+  icon?: React.ReactNode;
   title: string;
   description?: string;
   actionLabel?: string;
@@ -19,7 +19,15 @@ export function EmptyState({ icon = "📭", title, description, actionLabel, onA
       textAlign: "center",
       gap: "var(--space-3)",
     }}>
-      <div style={{ fontSize: "48px", lineHeight: 1, marginBottom: "var(--space-2)" }}>{icon}</div>
+      <div style={{
+        fontSize: "48px",
+        lineHeight: 1,
+        marginBottom: "var(--space-2)",
+        color: "var(--color-text-muted)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}>{icon}</div>
       <h3 style={{
         fontSize: "var(--text-lg)",
         fontWeight: 700,

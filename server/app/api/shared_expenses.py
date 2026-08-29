@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.auth import get_current_user_id
+from app.models.common import MessageResponse
 from app.models.shared_expense import BalanceResponse, SharedExpenseCreate, SharedExpenseResponse
 from app.services import shared_expense_service
 
@@ -15,13 +16,26 @@ async def create_shared_expense(
 
 
 @router.get("", response_model=list[SharedExpenseResponse])
-async def list_shared_expenses(user_id: str = Depends(get_current_user_id)):
-    return await shared_expense_service.get_shared_expenses(user_id)
+async def list_shared_expenses(friend_id: str | None = None, user_id: str = Depends(get_current_user_id)):
+    return await shared_expense_service.get_shared_expenses(user_id, friend_id)
 
 
 @router.get("/{shared_id}", response_model=SharedExpenseResponse)
 async def get_shared_expense(shared_id: str, user_id: str = Depends(get_current_user_id)):
     return await shared_expense_service.get_shared_expense(user_id, shared_id)
+
+
+@router.put("/{shared_id}", response_model=SharedExpenseResponse)
+async def update_shared_expense(
+    shared_id: str, data: SharedExpenseCreate, user_id: str = Depends(get_current_user_id)
+):
+    return await shared_expense_service.update_shared_expense(user_id, shared_id, data)
+
+
+@router.delete("/{shared_id}", response_model=MessageResponse)
+async def delete_shared_expense(shared_id: str, user_id: str = Depends(get_current_user_id)):
+    await shared_expense_service.delete_shared_expense(user_id, shared_id)
+    return MessageResponse(message="Shared expense deleted successfully.")
 
 
 balances_router = APIRouter(prefix="/balances", tags=["balances"])

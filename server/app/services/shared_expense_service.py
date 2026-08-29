@@ -4,18 +4,14 @@ from bson import ObjectId
 from fastapi import HTTPException, status
 
 from app.db.database import get_database
-from app.models.common import ExpenseType, PersonType, SettlementStatus, SplitMethod
+from app.models.common import ExpenseType, SettlementStatus, SplitMethod
 from app.models.shared_expense import (
     BalanceResponse,
     ParticipantResponse,
     SharedExpenseCreate,
     SharedExpenseResponse,
 )
-from app.services.money import (
-    calculate_equal_splits,
-    calculate_net_balance,
-    calculate_percentage_splits,
-)
+from app.services.money import calculate_equal_splits, calculate_percentage_splits
 
 
 def _participant_doc_to_response(doc: dict) -> ParticipantResponse:
@@ -38,16 +34,28 @@ async def _get_participants(shared_expense_id: str) -> list[ParticipantResponse]
     return [_participant_doc_to_response(d) for d in docs]
 
 
-def _shared_doc_to_response(doc: dict, participants: list[ParticipantResponse]) -> SharedExpenseResponse:
+def _your_share(user_id: str, participants: list[ParticipantResponse]) -> int:
+    """The signed-in user's own slice of the bill (0 if they aren't a participant)."""
+    return next(
+        (p.share_amount_minor for p in participants if p.person_type == "USER" and p.person_id == user_id),
+        0,
+    )
+
+
+def _shared_doc_to_response(
+    doc: dict, participants: list[ParticipantResponse], user_id: str
+) -> SharedExpenseResponse:
     return SharedExpenseResponse(
         id=str(doc["_id"]),
         expense_id=str(doc["expense_id"]),
         owner_user_id=str(doc["owner_user_id"]),
         title=doc["title"],
         total_amount_minor=doc["total_amount_minor"],
+        your_share_minor=_your_share(user_id, participants),
         currency=doc["currency"],
         expense_date=doc["expense_date"],
         category_id=doc.get("category_id"),
+        classification=doc.get("classification", "NEED"),
         payer_type=doc["payer_type"],
         payer_id=str(doc["payer_id"]),
         split_method=doc["split_method"],
@@ -59,11 +67,8 @@ def _shared_doc_to_response(doc: dict, participants: list[ParticipantResponse]) 
     )
 
 
-async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> SharedExpenseResponse:
-    db = get_database()
-    now = datetime.now(timezone.utc)
-
-    # Calculate shares based on split method
+def _compute_shares(data: SharedExpenseCreate) -> None:
+    """Fill in each participant's share_amount_minor / share_percentage in place."""
     participant_count = len(data.participants)
     if data.split_method == SplitMethod.EQUAL:
         shares = calculate_equal_splits(data.total_amount_minor, participant_count)
@@ -77,15 +82,27 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
             p.share_amount_minor = shares[i]
     # CUSTOM_AMOUNT: already validated by pydantic model_validator
 
-    # Create base expense record
+
+async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> SharedExpenseResponse:
+    db = get_database()
+    now = datetime.now(timezone.utc)
+
+    _compute_shares(data)
+    your_share = next(
+        (p.share_amount_minor or 0 for p in data.participants if p.person_type == "USER" and p.person_id == user_id),
+        0,
+    )
+
+    # Personal ledger entry — records only the user's own share, not the full
+    # bill, so "This Month" totals aren't inflated by money fronted for others.
     expense_doc = {
         "owner_user_id": ObjectId(user_id),
         "title": data.title,
-        "amount_minor": data.total_amount_minor,
+        "amount_minor": your_share,
         "currency": data.currency,
         "expense_date": data.expense_date.isoformat(),
         "category_id": data.category_id,
-        "classification": "NEED",  # Default for shared; user can update
+        "classification": data.classification.value,
         "expense_type": ExpenseType.SHARED.value,
         "note": data.note,
         "created_at": now,
@@ -93,7 +110,6 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
     }
     expense_result = await db.expenses.insert_one(expense_doc)
 
-    # Create shared expense record
     shared_doc = {
         "expense_id": expense_result.inserted_id,
         "owner_user_id": ObjectId(user_id),
@@ -102,6 +118,7 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
         "currency": data.currency,
         "expense_date": data.expense_date.isoformat(),
         "category_id": data.category_id,
+        "classification": data.classification.value,
         "payer_type": data.payer_type.value,
         "payer_id": data.payer_id,
         "split_method": data.split_method.value,
@@ -113,7 +130,6 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
     shared_result = await db.shared_expenses.insert_one(shared_doc)
     shared_id = shared_result.inserted_id
 
-    # Create participant records
     participant_docs = []
     for p in data.participants:
         paid = data.total_amount_minor if (
@@ -133,17 +149,24 @@ async def create_shared_expense(user_id: str, data: SharedExpenseCreate) -> Shar
 
     shared_doc["_id"] = shared_id
     participants = await _get_participants(str(shared_id))
-    return _shared_doc_to_response(shared_doc, participants)
+    return _shared_doc_to_response(shared_doc, participants, user_id)
 
 
-async def get_shared_expenses(user_id: str) -> list[SharedExpenseResponse]:
+async def get_shared_expenses(user_id: str, friend_id: str | None = None) -> list[SharedExpenseResponse]:
     db = get_database()
-    cursor = db.shared_expenses.find({"owner_user_id": ObjectId(user_id)}).sort("expense_date", -1)
+    query: dict = {"owner_user_id": ObjectId(user_id)}
+    if friend_id:
+        participant_cursor = db.shared_participants.find(
+            {"person_type": "FRIEND", "person_id": friend_id}, {"shared_expense_id": 1}
+        )
+        shared_ids = [p["shared_expense_id"] async for p in participant_cursor]
+        query["_id"] = {"$in": shared_ids}
+    cursor = db.shared_expenses.find(query).sort("expense_date", -1)
     docs = await cursor.to_list(length=200)
     result = []
     for doc in docs:
         participants = await _get_participants(str(doc["_id"]))
-        result.append(_shared_doc_to_response(doc, participants))
+        result.append(_shared_doc_to_response(doc, participants, user_id))
     return result
 
 
@@ -155,7 +178,92 @@ async def get_shared_expense(user_id: str, shared_id: str) -> SharedExpenseRespo
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared expense not found.")
     participants = await _get_participants(shared_id)
-    return _shared_doc_to_response(doc, participants)
+    return _shared_doc_to_response(doc, participants, user_id)
+
+
+async def update_shared_expense(
+    user_id: str, shared_id: str, data: SharedExpenseCreate
+) -> SharedExpenseResponse:
+    db = get_database()
+    existing = await db.shared_expenses.find_one(
+        {"_id": ObjectId(shared_id), "owner_user_id": ObjectId(user_id)}
+    )
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared expense not found.")
+
+    now = datetime.now(timezone.utc)
+    _compute_shares(data)
+    your_share = next(
+        (p.share_amount_minor or 0 for p in data.participants if p.person_type == "USER" and p.person_id == user_id),
+        0,
+    )
+
+    await db.expenses.update_one(
+        {"_id": existing["expense_id"]},
+        {"$set": {
+            "title": data.title,
+            "amount_minor": your_share,
+            "currency": data.currency,
+            "expense_date": data.expense_date.isoformat(),
+            "category_id": data.category_id,
+            "classification": data.classification.value,
+            "note": data.note,
+            "updated_at": now,
+        }},
+    )
+
+    await db.shared_expenses.update_one(
+        {"_id": existing["_id"]},
+        {"$set": {
+            "title": data.title,
+            "total_amount_minor": data.total_amount_minor,
+            "currency": data.currency,
+            "expense_date": data.expense_date.isoformat(),
+            "category_id": data.category_id,
+            "classification": data.classification.value,
+            "payer_type": data.payer_type.value,
+            "payer_id": data.payer_id,
+            "split_method": data.split_method.value,
+            "note": data.note,
+            "updated_at": now,
+        }},
+    )
+
+    await db.shared_participants.delete_many({"shared_expense_id": existing["_id"]})
+    participant_docs = []
+    for p in data.participants:
+        paid = data.total_amount_minor if (
+            p.person_type == data.payer_type and p.person_id == data.payer_id
+        ) else 0
+        participant_docs.append({
+            "shared_expense_id": existing["_id"],
+            "person_type": p.person_type.value,
+            "person_id": p.person_id,
+            "share_amount_minor": p.share_amount_minor or 0,
+            "share_percentage": p.share_percentage,
+            "paid_amount_minor": paid,
+            "settled_amount_minor": 0,
+        })
+    if participant_docs:
+        await db.shared_participants.insert_many(participant_docs)
+
+    updated_doc = await db.shared_expenses.find_one({"_id": existing["_id"]})
+    participants = await _get_participants(str(existing["_id"]))
+    return _shared_doc_to_response(updated_doc, participants, user_id)
+
+
+async def delete_shared_expense(user_id: str, shared_id: str) -> None:
+    """Cascades to the linked personal expense and participant records so
+    nothing is left orphaned (and silently still counted in balances)."""
+    db = get_database()
+    doc = await db.shared_expenses.find_one(
+        {"_id": ObjectId(shared_id), "owner_user_id": ObjectId(user_id)}
+    )
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared expense not found.")
+    await db.shared_participants.delete_many({"shared_expense_id": doc["_id"]})
+    await db.expenses.delete_one({"_id": doc["expense_id"], "owner_user_id": ObjectId(user_id)})
+    await db.shared_expenses.delete_one({"_id": doc["_id"]})
 
 
 async def get_balances(user_id: str) -> list[BalanceResponse]:
@@ -188,7 +296,6 @@ async def get_balances(user_id: str) -> list[BalanceResponse]:
 
         user_paid = user_participant.get("paid_amount_minor", 0)
         user_share = user_participant.get("share_amount_minor", 0)
-        user_settled = user_participant.get("settled_amount_minor", 0)
 
         for p in participants:
             if p["person_type"] == "USER" and p["person_id"] == user_id:
@@ -197,7 +304,6 @@ async def get_balances(user_id: str) -> list[BalanceResponse]:
             friend_type = p["person_type"]
             friend_paid = p.get("paid_amount_minor", 0)
             friend_share = p.get("share_amount_minor", 0)
-            friend_settled = p.get("settled_amount_minor", 0)
 
             # Net: positive means user should receive from friend
             net = (user_paid - user_share) - (friend_paid - friend_share)
@@ -211,6 +317,23 @@ async def get_balances(user_id: str) -> list[BalanceResponse]:
                     "currency": currency,
                 }
             balances[key]["net_balance_minor"] += net
+
+    # Apply recorded settlements: I_PAID reduces what the user owes (or
+    # increases what the friend owes them); THEY_PAID does the reverse.
+    settlements_cursor = db.settlements.find({"owner_user_id": ObjectId(user_id)})
+    settlement_docs = await settlements_cursor.to_list(length=1000)
+    for s in settlement_docs:
+        friend_id = s["friend_id"]
+        key = f"FRIEND:{friend_id}"
+        delta = s["amount_minor"] if s["direction"] == "I_PAID" else -s["amount_minor"]
+        if key not in balances:
+            balances[key] = {
+                "person_type": "FRIEND",
+                "person_id": friend_id,
+                "net_balance_minor": 0,
+                "currency": s.get("currency", "INR"),
+            }
+        balances[key]["net_balance_minor"] += delta
 
     # Resolve friend names
     result = []

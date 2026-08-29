@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from bson import ObjectId
 from fastapi import HTTPException, status
@@ -8,112 +8,50 @@ from app.models.recurring import (
     RecurringExpenseCreate,
     RecurringExpenseResponse,
     RecurringExpenseUpdate,
-    RecurringParticipantResponse,
 )
-from app.models.common import ExpenseType, SplitMethod
-from app.services.money import calculate_equal_splits, calculate_percentage_splits
 
 
-def _participant_doc_to_response(doc: dict) -> RecurringParticipantResponse:
-    return RecurringParticipantResponse(
-        id=str(doc["_id"]),
-        recurring_expense_id=str(doc["recurring_expense_id"]),
-        person_type=doc["person_type"],
-        person_id=str(doc["person_id"]),
-        share_amount_minor=doc.get("share_amount_minor"),
-        share_percentage=doc.get("share_percentage"),
-    )
-
-
-def _doc_to_response(doc: dict, participants: list[RecurringParticipantResponse]) -> RecurringExpenseResponse:
+def _doc_to_response(doc: dict) -> RecurringExpenseResponse:
     return RecurringExpenseResponse(
         id=str(doc["_id"]),
         owner_user_id=str(doc["owner_user_id"]),
         title=doc["title"],
         amount_minor=doc["amount_minor"],
         currency=doc["currency"],
+        category_id=doc.get("category_id"),
+        classification=doc["classification"],
         billing_day=doc["billing_day"],
-        payer_type=doc["payer_type"],
-        payer_id=str(doc["payer_id"]),
-        split_method=doc["split_method"],
-        start_date=doc["start_date"],
-        end_date=doc.get("end_date"),
-        active=doc.get("active", True),
-        participants=participants,
+        is_active=doc.get("is_active", True),
         created_at=doc["created_at"],
         updated_at=doc["updated_at"],
     )
 
 
-async def _get_participants(recurring_id: str) -> list[RecurringParticipantResponse]:
-    db = get_database()
-    cursor = db.recurring_participants.find({"recurring_expense_id": ObjectId(recurring_id)})
-    docs = await cursor.to_list(length=100)
-    return [_participant_doc_to_response(d) for d in docs]
-
-
 async def create_recurring(user_id: str, data: RecurringExpenseCreate) -> RecurringExpenseResponse:
     db = get_database()
     now = datetime.now(timezone.utc)
-
-    # Pre-calculate shares for participants
-    count = len(data.participants)
-    if data.split_method == SplitMethod.EQUAL:
-        shares = calculate_equal_splits(data.amount_minor, count)
-        for i, p in enumerate(data.participants):
-            p.share_amount_minor = shares[i]
-            p.share_percentage = round(100.0 / count, 4)
-    elif data.split_method == SplitMethod.PERCENTAGE:
-        percentages = [p.share_percentage or 0.0 for p in data.participants]
-        shares = calculate_percentage_splits(data.amount_minor, percentages)
-        for i, p in enumerate(data.participants):
-            p.share_amount_minor = shares[i]
-
     doc = {
         "owner_user_id": ObjectId(user_id),
         "title": data.title,
         "amount_minor": data.amount_minor,
         "currency": data.currency,
+        "category_id": data.category_id,
+        "classification": data.classification.value,
         "billing_day": data.billing_day,
-        "payer_type": data.payer_type.value,
-        "payer_id": data.payer_id,
-        "split_method": data.split_method.value,
-        "start_date": data.start_date.isoformat(),
-        "end_date": data.end_date.isoformat() if data.end_date else None,
-        "active": True,
+        "is_active": True,
         "created_at": now,
         "updated_at": now,
     }
     result = await db.recurring_expenses.insert_one(doc)
-    recurring_id = result.inserted_id
-
-    participant_docs = [
-        {
-            "recurring_expense_id": recurring_id,
-            "person_type": p.person_type.value,
-            "person_id": p.person_id,
-            "share_amount_minor": p.share_amount_minor,
-            "share_percentage": p.share_percentage,
-        }
-        for p in data.participants
-    ]
-    if participant_docs:
-        await db.recurring_participants.insert_many(participant_docs)
-
-    doc["_id"] = recurring_id
-    participants = await _get_participants(str(recurring_id))
-    return _doc_to_response(doc, participants)
+    doc["_id"] = result.inserted_id
+    return _doc_to_response(doc)
 
 
 async def get_recurring_expenses(user_id: str) -> list[RecurringExpenseResponse]:
     db = get_database()
     cursor = db.recurring_expenses.find({"owner_user_id": ObjectId(user_id)}).sort("title", 1)
     docs = await cursor.to_list(length=200)
-    result = []
-    for doc in docs:
-        participants = await _get_participants(str(doc["_id"]))
-        result.append(_doc_to_response(doc, participants))
-    return result
+    return [_doc_to_response(d) for d in docs]
 
 
 async def get_recurring(user_id: str, recurring_id: str) -> RecurringExpenseResponse:
@@ -123,18 +61,18 @@ async def get_recurring(user_id: str, recurring_id: str) -> RecurringExpenseResp
     )
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recurring expense not found.")
-    participants = await _get_participants(recurring_id)
-    return _doc_to_response(doc, participants)
+    return _doc_to_response(doc)
 
 
 async def update_recurring(
     user_id: str, recurring_id: str, data: RecurringExpenseUpdate
 ) -> RecurringExpenseResponse:
-    """Update template — does NOT modify historical generated expenses."""
     db = get_database()
     updates = {k: v for k, v in data.model_dump(exclude_none=True).items()}
-    if "end_date" in updates and updates["end_date"]:
-        updates["end_date"] = updates["end_date"].isoformat()
+    if "classification" in updates:
+        updates["classification"] = data.classification.value
+    if not updates:
+        return await get_recurring(user_id, recurring_id)
     updates["updated_at"] = datetime.now(timezone.utc)
 
     result = await db.recurring_expenses.find_one_and_update(
@@ -144,16 +82,15 @@ async def update_recurring(
     )
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recurring expense not found.")
-    participants = await _get_participants(recurring_id)
-    return _doc_to_response(result, participants)
+    return _doc_to_response(result)
 
 
 async def pause_recurring(user_id: str, recurring_id: str) -> RecurringExpenseResponse:
-    return await update_recurring(user_id, recurring_id, RecurringExpenseUpdate(active=False))
+    return await update_recurring(user_id, recurring_id, RecurringExpenseUpdate(is_active=False))
 
 
 async def resume_recurring(user_id: str, recurring_id: str) -> RecurringExpenseResponse:
-    return await update_recurring(user_id, recurring_id, RecurringExpenseUpdate(active=True))
+    return await update_recurring(user_id, recurring_id, RecurringExpenseUpdate(is_active=True))
 
 
 async def delete_recurring(user_id: str, recurring_id: str) -> None:
@@ -163,4 +100,45 @@ async def delete_recurring(user_id: str, recurring_id: str) -> None:
     )
     if result.deleted_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recurring expense not found.")
-    await db.recurring_participants.delete_many({"recurring_expense_id": ObjectId(recurring_id)})
+
+
+async def process_due_recurring_expenses() -> int:
+    """
+    Post a real personal-expense record for every active recurring template
+    whose billing day has arrived and hasn't already been posted this month.
+    Idempotent per (template, month) via last_generated_month, so it's safe
+    to call repeatedly (e.g. from a periodic background task).
+    """
+    db = get_database()
+    today = datetime.now(timezone.utc).date()
+    current_month = today.strftime("%Y-%m")
+
+    cursor = db.recurring_expenses.find({
+        "is_active": True,
+        "billing_day": {"$lte": today.day},
+        "last_generated_month": {"$ne": current_month},
+    })
+    due = await cursor.to_list(length=1000)
+
+    for tmpl in due:
+        now = datetime.now(timezone.utc)
+        await db.expenses.insert_one({
+            "owner_user_id": tmpl["owner_user_id"],
+            "title": tmpl["title"],
+            "amount_minor": tmpl["amount_minor"],
+            "currency": tmpl["currency"],
+            "expense_date": today.isoformat(),
+            "category_id": tmpl.get("category_id"),
+            "classification": tmpl["classification"],
+            "payment_method": None,
+            "expense_type": "PERSONAL",
+            "note": f"Auto-posted from recurring: {tmpl['title']}",
+            "created_at": now,
+            "updated_at": now,
+        })
+        await db.recurring_expenses.update_one(
+            {"_id": tmpl["_id"]},
+            {"$set": {"last_generated_month": current_month, "updated_at": now}},
+        )
+
+    return len(due)

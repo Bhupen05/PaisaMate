@@ -1,0 +1,47 @@
+
+> web@0.1.0 dev
+> next dev
+
+   ▲ Next.js 15.5.24
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.0.139:3000
+
+ ✓ Starting...
+ ✓ Ready in 16.7s
+ ○ Compiling /invite/[token] ...
+ ✓ Compiled /invite/[token] in 3.9s (930 modules)
+ GET /invite/nonexistent-token-123 200 in 6041ms
+ ○ Compiling /friends ...
+ ✓ Compiled /friends in 1455ms (1041 modules)
+ GET /friends 200 in 1883ms
+ GET /invite/jiLSwMDKxMfVYpzgBCiPyhj1pu3QavAr 200 in 92ms
+ GET /invite/-HRfAsm5FXlooeR0cuOc6fS3TFrRV9_h 200 in 76ms
+ ○ Compiling /shared ...
+ ✓ Compiled /transactions in 4.7s (1083 modules)
+ GET /friends 200 in 4715ms
+ GET /transactions 200 in 4703ms
+ GET /shared 200 in 5553ms
+ ○ Compiling /favicon.ico ...
+ ✓ Compiled /favicon.ico in 876ms (686 modules)
+ GET /favicon.ico 200 in 1402ms
+ ○ Compiling /dashboard ...
+ ✓ Compiled /dashboard in 6.6s (2155 modules)
+ GET /dashboard 200 in 7004ms
+ GET /friends 200 in 245ms
+ ✓ Compiled in 341ms (940 modules)
+ ✓ Compiled in 771ms (2132 modules)
+ ✓ Compiled in 433ms (2132 modules)
+ GET /friends 200 in 799ms
+ ○ Compiling /login ...
+ ✓ Compiled /login in 2.7s (2165 modules)
+ GET /login 200 in 3440ms
+ ○ Compiling /register ...
+ ✓ Compiled /register in 1313ms (2172 modules)
+ GET /register 200 in 1825ms
+ ○ Compiling /invite/[token] ...
+ ✓ Compiled /invite/[token] in 1188ms (1221 modules)
+ GET /invite/abc123 200 in 1727ms
+ GET /friends 200 in 224ms
+ ○ Compiling /favicon.ico ...
+ ✓ Compiled /favicon.ico in 1481ms (1238 modules)
+ GET /favicon.ico 200 in 1748ms

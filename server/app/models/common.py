@@ -52,6 +52,7 @@ class SettlementStatus(str, Enum):
 
 
 class FriendStatus(str, Enum):
+    PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     ARCHIVED = "ARCHIVED"
 
@@ -61,17 +62,21 @@ class PersonType(str, Enum):
     FRIEND = "FRIEND"
 
 
+class SettlementDirection(str, Enum):
+    I_PAID = "I_PAID"
+    THEY_PAID = "THEY_PAID"
+
+
 CATEGORIES = [
     "food",
     "transport",
-    "shopping",
-    "bills",
-    "housing",
     "health",
-    "education",
     "entertainment",
-    "work",
-    "travel",
+    "shopping",
+    "utilities",
+    "housing",
+    "education",
+    "personal",
     "other",
 ]
 

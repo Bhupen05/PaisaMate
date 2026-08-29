@@ -92,6 +92,17 @@ async def get_expense(user_id: str, expense_id: str) -> ExpenseResponse:
 
 async def update_expense(user_id: str, expense_id: str, data: ExpenseUpdate) -> ExpenseResponse:
     db = get_database()
+    existing = await db.expenses.find_one(
+        {"_id": ObjectId(expense_id), "owner_user_id": ObjectId(user_id)}
+    )
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found.")
+    if existing.get("expense_type") == ExpenseType.SHARED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This is a shared expense. Edit it from the Shared Expenses page instead.",
+        )
+
     updates = {k: v for k, v in data.model_dump(exclude_none=True).items()}
     if "expense_date" in updates:
         updates["expense_date"] = updates["expense_date"].isoformat()
@@ -112,8 +123,14 @@ async def update_expense(user_id: str, expense_id: str, data: ExpenseUpdate) -> 
 
 async def delete_expense(user_id: str, expense_id: str) -> None:
     db = get_database()
-    result = await db.expenses.delete_one(
+    doc = await db.expenses.find_one(
         {"_id": ObjectId(expense_id), "owner_user_id": ObjectId(user_id)}
     )
-    if result.deleted_count == 0:
+    if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found.")
+    if doc.get("expense_type") == ExpenseType.SHARED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This is a shared expense. Delete it from the Shared Expenses page instead.",
+        )
+    await db.expenses.delete_one({"_id": ObjectId(expense_id), "owner_user_id": ObjectId(user_id)})

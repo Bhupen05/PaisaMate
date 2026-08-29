@@ -1,0 +1,6 @@
+{
+  "name": "Suraty - Personal Finance & Expense Tracker",
+  "description": "A refined personal finance and shared expense tracker categorized by Need, Want, and Dream with group splits and settlements.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,49 +1,27 @@
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.common import PersonType, SplitMethod
-
-
-class RecurringParticipantCreate(BaseModel):
-    person_type: PersonType
-    person_id: str
-    share_amount_minor: int | None = Field(default=None, ge=0)
-    share_percentage: float | None = Field(default=None, ge=0, le=100)
+from app.models.common import Classification
 
 
 class RecurringExpenseCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     amount_minor: int = Field(..., gt=0)
     currency: str = Field(default="INR", max_length=3)
+    category_id: str | None = None
+    classification: Classification = Classification.NEED
     billing_day: int = Field(..., ge=1, le=28)
-    payer_type: PersonType
-    payer_id: str
-    participants: list[RecurringParticipantCreate] = Field(..., min_length=1)
-    split_method: SplitMethod
-    start_date: date
-    end_date: date | None = None
 
 
 class RecurringExpenseUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     amount_minor: int | None = Field(default=None, gt=0)
+    currency: str | None = Field(default=None, max_length=3)
+    category_id: str | None = None
+    classification: Classification | None = None
     billing_day: int | None = Field(default=None, ge=1, le=28)
-    payer_type: PersonType | None = None
-    payer_id: str | None = None
-    participants: list[RecurringParticipantCreate] | None = None
-    split_method: SplitMethod | None = None
-    end_date: date | None = None
-    active: bool | None = None
-
-
-class RecurringParticipantResponse(BaseModel):
-    id: str
-    recurring_expense_id: str
-    person_type: PersonType
-    person_id: str
-    share_amount_minor: int | None
-    share_percentage: float | None
+    is_active: bool | None = None
 
 
 class RecurringExpenseResponse(BaseModel):
@@ -52,13 +30,9 @@ class RecurringExpenseResponse(BaseModel):
     title: str
     amount_minor: int
     currency: str
+    category_id: str | None
+    classification: Classification
     billing_day: int
-    payer_type: PersonType
-    payer_id: str
-    split_method: SplitMethod
-    start_date: date
-    end_date: date | None
-    active: bool
-    participants: list[RecurringParticipantResponse]
+    is_active: bool
     created_at: datetime
     updated_at: datetime

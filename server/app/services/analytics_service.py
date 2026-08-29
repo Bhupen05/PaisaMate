@@ -10,6 +10,7 @@ from app.models.analytics import (
     DashboardSummary,
     MonthlyPoint,
 )
+from app.services.shared_expense_service import get_balances
 
 
 async def get_dashboard_summary(user_id: str, currency: str = "INR") -> DashboardSummary:
@@ -50,9 +51,9 @@ async def get_dashboard_summary(user_id: str, currency: str = "INR") -> Dashboar
     class_results = await db.expenses.aggregate(class_pipeline).to_list(10)
     class_map = {r["_id"]: r["total"] for r in class_results}
 
-    # TODO: Phase 6 — derive owe/receive from settlements + participant records
-    you_owe = 0
-    owed_to_you = 0
+    balances = await get_balances(user_id)
+    you_owe = sum(-b.net_balance_minor for b in balances if b.net_balance_minor < 0)
+    owed_to_you = sum(b.net_balance_minor for b in balances if b.net_balance_minor > 0)
 
     return DashboardSummary(
         today_total_minor=today_total,
@@ -80,8 +81,8 @@ async def get_analytics_summary(user_id: str, currency: str = "INR") -> Analytic
     total_spending = total_result[0]["total"] if total_result else 0
     total_count = total_result[0]["count"] if total_result else 1
 
-    # Average daily
-    avg_daily = total_spending // max(total_count, 1)
+    # Average per transaction
+    avg_per_transaction = total_spending // max(total_count, 1)
 
     # Monthly trend (last 6 months)
     monthly_points = []
@@ -139,7 +140,7 @@ async def get_analytics_summary(user_id: str, currency: str = "INR") -> Analytic
 
     return AnalyticsSummary(
         total_spending_minor=total_spending,
-        average_daily_minor=avg_daily,
+        average_per_transaction_minor=avg_per_transaction,
         monthly_trend=monthly_points,
         category_breakdown=category_breakdown,
         classification_breakdown=classification_breakdown,

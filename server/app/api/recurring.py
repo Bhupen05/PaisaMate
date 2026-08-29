@@ -23,7 +23,7 @@ async def get_recurring(recurring_id: str, user_id: str = Depends(get_current_us
     return await recurring_service.get_recurring(user_id, recurring_id)
 
 
-@router.patch("/{recurring_id}", response_model=RecurringExpenseResponse)
+@router.put("/{recurring_id}", response_model=RecurringExpenseResponse)
 async def update_recurring(
     recurring_id: str,
     data: RecurringExpenseUpdate,

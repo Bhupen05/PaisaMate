@@ -1,14 +1,75 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
 import { ClassificationBadge } from "@/components/finance/ClassificationBadge";
+import { StatusBadge } from "@/components/finance/StatusBadge";
+import { MoneyAmount } from "@/components/finance/MoneyAmount";
+import { getBalanceStatus } from "@/components/finance/BalanceIndicator";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { Modal } from "@/components/ui/Modal";
+import { Avatar } from "@/components/ui/Avatar";
+import { ListRow } from "@/components/ui/ListRow";
+import { Tile } from "@/components/ui/Tile";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Handshake,
+  ClipboardList,
+  User,
+  Users,
+  CheckCircle2,
+  AlertTriangle,
+  Check,
+} from "lucide-react";
+
+const WIZARD_STEP_LABELS = ["Details", "Members", "Payer", "Split", "Review"];
+
+function WizardSteps({ step, onJump }: { step: number; onJump: (n: number) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", marginBottom: "var(--space-5)" }}>
+      {WIZARD_STEP_LABELS.map((label, idx) => {
+        const n = idx + 1;
+        const isDone = n < step;
+        const isCurrent = n === step;
+        const reachable = n <= step;
+        return (
+          <div key={n} style={{ display: "flex", alignItems: "center", flex: n < WIZARD_STEP_LABELS.length ? 1 : "0 0 auto" }}>
+            <button
+              type="button"
+              onClick={() => reachable && onJump(n)}
+              disabled={!reachable}
+              aria-label={`Step ${n}: ${label}`}
+              aria-current={isCurrent ? "step" : undefined}
+              title={label}
+              style={{
+                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: "var(--text-xs)", fontWeight: 700,
+                border: isCurrent ? "2px solid var(--color-accent)" : "none",
+                background: isDone ? "var(--color-accent)" : isCurrent ? "var(--color-accent-light)" : "var(--color-surface-2)",
+                color: isDone ? "#fff" : isCurrent ? "var(--color-accent)" : "var(--color-text-muted)",
+                cursor: reachable ? "pointer" : "default",
+              }}
+            >
+              {isDone ? <Check size={13} /> : n}
+            </button>
+            {n < WIZARD_STEP_LABELS.length && (
+              <div style={{ flex: 1, height: 2, background: isDone ? "var(--color-accent)" : "var(--color-border)", margin: "0 4px" }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const CATEGORIES = ["food", "transport", "health", "entertainment", "shopping", "utilities", "housing", "education", "personal", "other"];
 
@@ -33,9 +94,11 @@ interface SharedExpense {
   id: string;
   title: string;
   total_amount_minor: number;
+  your_share_minor: number;
   currency: string;
   expense_date: string;
   category_id: string | null;
+  classification: "NEED" | "WANT" | "DREAM";
   payer_type: "USER" | "FRIEND";
   payer_id: string;
   split_method: "EQUAL" | "CUSTOM_AMOUNT" | "PERCENTAGE";
@@ -51,24 +114,54 @@ interface Balance {
   currency: string;
 }
 
+const TODAY = () => new Date().toISOString().split("T")[0];
+
 export default function SharedExpensesPage() {
   const { user } = useAuthStore();
   const userCurrency = user?.currency || "INR";
 
-  const [sharedExpenses, setSharedExpenses] = useState<SharedExpense[]>([]);
-  const [friends, setFriends] = useState<Friend[]>([]);
-  const [balances, setBalances] = useState<Balance[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+
+  const sharedQuery = useQuery({
+    queryKey: ["shared-expenses"],
+    queryFn: async () => (await api.get<SharedExpense[]>("/shared-expenses")).data ?? [],
+  });
+  const friendsQuery = useQuery({
+    queryKey: ["friends"],
+    queryFn: async () => (await api.get<Friend[]>("/friends")).data ?? [],
+  });
+  const balancesQuery = useQuery({
+    queryKey: ["balances"],
+    queryFn: async () => (await api.get<Balance[]>("/balances")).data ?? [],
+  });
+  const sharedExpenses = sharedQuery.data ?? [];
+  const friends = friendsQuery.data ?? [];
+  // Only friends who've accepted their invite can be split with — pending
+  // invites aren't real collaborators yet.
+  const activeFriends = friends.filter((f) => f.status === "ACTIVE");
+  const balances = balancesQuery.data ?? [];
+  const loading = sharedQuery.isPending || friendsQuery.isPending || balancesQuery.isPending;
+
+  const invalidateShared = () => {
+    queryClient.invalidateQueries({ queryKey: ["shared-expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["balances"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["analytics-summary"] });
+  };
 
   // Wizard Modal state
   const [showWizard, setShowWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
+  const [editTarget, setEditTarget] = useState<SharedExpense | null>(null);
+
+  // Delete confirmation
+  const [deleteTarget, setDeleteTarget] = useState<SharedExpense | null>(null);
 
   // Step 1: Expense details
   const [title, setTitle] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
-  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split("T")[0]);
+  const [expenseDate, setExpenseDate] = useState(TODAY());
   const [category, setCategory] = useState("other");
   const [classification, setClassification] = useState<"NEED" | "WANT" | "DREAM">("WANT");
   const [note, setNote] = useState("");
@@ -86,54 +179,29 @@ export default function SharedExpensesPage() {
   const [customShares, setCustomShares] = useState<Record<string, string>>({}); // "type:id" -> string
   const [customPercentages, setCustomPercentages] = useState<Record<string, string>>({}); // "type:id" -> string
 
-  const [submitting, setSubmitting] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
-
-  const fetchAllData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [sharedRes, friendsRes, balancesRes] = await Promise.all([
-        api.get("/shared-expenses"),
-        api.get("/friends"),
-        api.get("/balances"),
-      ]);
-      setSharedExpenses(sharedRes.data ?? []);
-      setFriends(friendsRes.data ?? []);
-      setBalances(balancesRes.data ?? []);
-    } catch (err) {
-      console.error("Failed to load shared expenses data", err);
-      setError("Unable to load shared expenses. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchAllData();
-  }, []);
 
   // Update default payer when user changes payerType or step progress
   useEffect(() => {
     if (payerType === "USER" && user) {
       setPayerId(user.id);
-    } else if (payerType === "FRIEND" && friends.length > 0) {
+    } else if (payerType === "FRIEND" && activeFriends.length > 0 && !payerId) {
       // Find the first selected friend to be the default payer
-      const selectedFriendIds = friends.filter(f => selectedFriends[f.id]).map(f => f.id);
+      const selectedFriendIds = activeFriends.filter(f => selectedFriends[f.id]).map(f => f.id);
       if (selectedFriendIds.length > 0) {
         setPayerId(selectedFriendIds[0]);
       } else {
-        setPayerId(friends[0].id);
+        setPayerId(activeFriends[0].id);
       }
     }
-  }, [payerType, friends, selectedFriends, user]);
+  }, [payerType, activeFriends, selectedFriends, user]);
 
   const activeParticipantsList = () => {
     const list: Array<{ id: string; type: "USER" | "FRIEND"; name: string }> = [];
     if (selectedUser && user) {
       list.push({ id: user.id, type: "USER", name: "You" });
     }
-    friends.forEach((f) => {
+    activeFriends.forEach((f) => {
       if (selectedFriends[f.id]) {
         list.push({ id: f.id, type: "FRIEND", name: f.name });
       }
@@ -220,10 +288,97 @@ export default function SharedExpensesPage() {
 
   const { shareAmounts, isValid, detailsText, totalMinor } = getSplitState();
 
-  const handleCreateShared = async () => {
-    if (!isValid || !title || totalMinor <= 0) return;
+  const resetWizardFields = () => {
+    setWizardStep(1);
+    setWizardError(null);
+    setEditTarget(null);
+    setTitle("");
+    setTotalAmount("");
+    setExpenseDate(TODAY());
+    setCategory("other");
+    setClassification("WANT");
+    setNote("");
+    setSelectedUser(true);
+    setSelectedFriends({});
+    setPayerType("USER");
+    setPayerId("");
+    setSplitMethod("EQUAL");
+    setCustomShares({});
+    setCustomPercentages({});
+  };
 
-    setSubmitting(true);
+  const openCreate = () => {
+    resetWizardFields();
+    setShowWizard(true);
+  };
+
+  const openEdit = (item: SharedExpense) => {
+    setEditTarget(item);
+    setTitle(item.title);
+    setTotalAmount(String(item.total_amount_minor / 100));
+    setExpenseDate(item.expense_date);
+    setCategory(item.category_id ?? "other");
+    setClassification(item.classification);
+    setNote(item.note ?? "");
+
+    setSelectedUser(item.participants.some((p) => p.person_type === "USER"));
+    const friendMap: Record<string, boolean> = {};
+    item.participants
+      .filter((p) => p.person_type === "FRIEND")
+      .forEach((p) => { friendMap[p.person_id] = true; });
+    setSelectedFriends(friendMap);
+
+    setPayerType(item.payer_type);
+    setPayerId(item.payer_id);
+    setSplitMethod(item.split_method);
+
+    const shares: Record<string, string> = {};
+    const pcts: Record<string, string> = {};
+    item.participants.forEach((p) => {
+      const key = `${p.person_type}:${p.person_id}`;
+      shares[key] = String(p.share_amount_minor / 100);
+      if (p.share_percentage != null) pcts[key] = String(p.share_percentage);
+    });
+    setCustomShares(shares);
+    setCustomPercentages(pcts);
+
+    setWizardStep(1);
+    setWizardError(null);
+    setShowWizard(true);
+  };
+
+  const closeWizard = () => {
+    setShowWizard(false);
+    resetWizardFields();
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) =>
+      editTarget ? api.put(`/shared-expenses/${editTarget.id}`, payload) : api.post("/shared-expenses", payload),
+    onSuccess: () => {
+      invalidateShared();
+      closeWizard();
+    },
+    onError: (err: any) => setWizardError(err.response?.data?.detail || "Failed to save shared expense."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/shared-expenses/${id}`),
+    onSuccess: () => {
+      invalidateShared();
+      setDeleteTarget(null);
+    },
+    onError: (err: any) => {
+      setError(err.response?.data?.detail || "Unable to delete shared expense.");
+      setDeleteTarget(null);
+    },
+  });
+
+  const submitting = saveMutation.isPending;
+  const deleting = deleteMutation.isPending;
+
+  const handleSubmitShared = () => {
+    if (!isValid || !title || totalMinor <= 0) return;
     setWizardError(null);
 
     const apiParticipants = activeParticipantsList().map((p) => {
@@ -238,36 +393,24 @@ export default function SharedExpensesPage() {
       };
     });
 
-    try {
-      await api.post("/shared-expenses", {
-        title,
-        total_amount_minor: totalMinor,
-        currency: userCurrency,
-        expense_date: expenseDate,
-        category_id: category,
-        classification,
-        payer_type: payerType,
-        payer_id: payerId,
-        participants: apiParticipants,
-        split_method: splitMethod,
-        note: note || null,
-      });
+    saveMutation.mutate({
+      title,
+      total_amount_minor: totalMinor,
+      currency: userCurrency,
+      expense_date: expenseDate,
+      category_id: category,
+      classification,
+      payer_type: payerType,
+      payer_id: payerId,
+      participants: apiParticipants,
+      split_method: splitMethod,
+      note: note || null,
+    });
+  };
 
-      setShowWizard(false);
-      setWizardStep(1);
-      setTitle("");
-      setTotalAmount("");
-      setNote("");
-      setSelectedFriends({});
-      setCustomShares({});
-      setCustomPercentages({});
-      fetchAllData();
-    } catch (err: any) {
-      console.error(err);
-      setWizardError(err.response?.data?.detail || "Failed to create shared expense.");
-    } finally {
-      setSubmitting(false);
-    }
+  const handleDeleteShared = () => {
+    if (!deleteTarget) return;
+    deleteMutation.mutate(deleteTarget.id);
   };
 
   const handleNextStep = () => {
@@ -309,12 +452,14 @@ export default function SharedExpensesPage() {
             Who owes whom, and why?
           </p>
         </div>
-        <button onClick={() => setShowWizard(true)} className="btn btn-primary">
-          ➕ Split Bill
+        <button onClick={openCreate} className="btn btn-primary">
+          <Plus size={16} /> Split Bill
         </button>
       </div>
 
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {(error || sharedQuery.isError || friendsQuery.isError || balancesQuery.isError) && (
+        <ErrorBanner message={error ?? "Unable to load shared expenses. Please try again."} onDismiss={() => setError(null)} />
+      )}
 
       {/* ── Section 1: Outstanding Balances ── */}
       <div className="card" style={{ padding: "var(--space-5)", marginBottom: "var(--space-6)" }}>
@@ -324,51 +469,25 @@ export default function SharedExpensesPage() {
         {loading ? (
           <div style={{ padding: "10px 0" }}><LoadingSpinner size={24} /></div>
         ) : nonZeroBalances.length === 0 ? (
-          <EmptyState icon="🤝" title="You're all settled" description="No outstanding balances with friends." />
+          <EmptyState icon={<Handshake size={40} />} title="You're all settled" description="No outstanding balances with friends." />
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
             {nonZeroBalances.map((b) => {
-              const isOwed = b.net_balance_minor > 0;
+              const status = getBalanceStatus(b.net_balance_minor);
               return (
-                <div key={b.person_id} style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "var(--space-3) 0",
-                  borderBottom: "1px solid var(--color-border)",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-                    <div style={{
-                      width: "32px",
-                      height: "32px",
-                      borderRadius: "50%",
-                      backgroundColor: "var(--color-accent-light)",
-                      color: "var(--color-accent)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: 700,
-                      fontSize: "var(--text-xs)",
-                    }}>
-                      {b.person_name.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>{b.person_name}</span>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)" }}>
-                      {isOwed ? "Owed to you" : "You owe"}
-                    </div>
-                    <span className="amount" style={{
-                      fontSize: "var(--text-base)",
-                      fontWeight: 700,
-                      color: isOwed ? "var(--color-success)" : "var(--color-danger)",
-                    }}>
-                      {formatMinor(Math.abs(b.net_balance_minor), b.currency)}
-                    </span>
-                  </div>
-                </div>
+                <ListRow
+                  key={b.person_id}
+                  leading={<Avatar name={b.person_name} size={32} />}
+                  title={b.person_name}
+                  subtitle={<span style={{ color: status.color }}>{status.label}</span>}
+                  trailing={
+                    <MoneyAmount
+                      amountMinor={b.net_balance_minor}
+                      currency={b.currency}
+                      variant={b.net_balance_minor > 0 ? "positive" : "negative"}
+                    />
+                  }
+                />
               );
             })}
           </div>
@@ -383,7 +502,7 @@ export default function SharedExpensesPage() {
         {loading ? (
           <LoadingSpinner centered />
         ) : sharedExpenses.length === 0 ? (
-          <EmptyState icon="📋" title="No shared expenses yet" description="Start tracking bills split with your friends." actionLabel="Split Bill" onAction={() => setShowWizard(true)} />
+          <EmptyState icon={<ClipboardList size={40} />} title="No shared expenses yet" description="Start tracking bills split with your friends." actionLabel="Split Bill" onAction={openCreate} />
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "var(--text-sm)" }}>
@@ -391,11 +510,13 @@ export default function SharedExpensesPage() {
                 <tr style={{ borderBottom: "2px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
                   <th style={{ padding: "var(--space-3) var(--space-2)" }}>Title</th>
                   <th style={{ padding: "var(--space-3) var(--space-2)" }}>Date</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Type</th>
                   <th style={{ padding: "var(--space-3) var(--space-2)" }}>Paid By</th>
                   <th style={{ padding: "var(--space-3) var(--space-2)" }}>Split Details</th>
-                  <th style={{ padding: "var(--space-3) var(--space-2)" }}>Split Method</th>
                   <th style={{ padding: "var(--space-3) var(--space-2)" }}>Status</th>
-                  <th style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right" }}>Total Amount</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right" }}>Your Share</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right" }}>Total</th>
+                  <th style={{ padding: "var(--space-3) var(--space-2)" }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -407,22 +528,27 @@ export default function SharedExpensesPage() {
                     <tr key={item.id} style={{ borderBottom: "1px solid var(--color-border)" }} className="table-row">
                       <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 600 }}>{item.title}</td>
                       <td style={{ padding: "var(--space-3) var(--space-2)", color: "var(--color-text-secondary)" }}>{item.expense_date}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)" }}>
+                        <ClassificationBadge value={item.classification} />
+                      </td>
                       <td style={{ padding: "var(--space-3) var(--space-2)", fontWeight: 500 }}>{payerName}</td>
                       <td style={{ padding: "var(--space-3) var(--space-2)", color: "var(--color-text-secondary)" }}>
-                        {item.participants.length} participants
-                      </td>
-                      <td style={{ padding: "var(--space-3) var(--space-2)", fontSize: "11px", fontWeight: 600, color: "var(--color-text-secondary)" }}>
-                        {item.split_method.replace("_", " ")}
+                        {item.participants.length} participants · {item.split_method.replace("_", " ")}
                       </td>
                       <td style={{ padding: "var(--space-3) var(--space-2)" }}>
-                        <span className={`badge ${
-                          item.status === "SETTLED" ? "badge-need" : "badge-dream"
-                        }`}>
-                          {item.status}
-                        </span>
+                        <StatusBadge status={item.status} />
                       </td>
-                      <td style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right", fontWeight: 600 }} className="amount">
+                      <td style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right" }}>
+                        <MoneyAmount amountMinor={item.your_share_minor} currency={item.currency} variant="neutral" />
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", textAlign: "right", color: "var(--color-text-secondary)" }} className="amount">
                         {formatMinor(item.total_amount_minor, item.currency)}
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-2)", whiteSpace: "nowrap" }}>
+                        <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)} aria-label={`Edit ${item.title}`}><Pencil size={13} /> Edit</button>
+                          <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(item)} aria-label={`Delete ${item.title}`}><Trash2 size={13} /> Delete</button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -436,12 +562,8 @@ export default function SharedExpensesPage() {
       {/* ── 5-Step Shared Split Wizard Modal ── */}
       <Modal
         open={showWizard}
-        onClose={() => {
-          setShowWizard(false);
-          setWizardStep(1);
-          setWizardError(null);
-        }}
-        title={`Split Bill — Step ${wizardStep} of 5`}
+        onClose={closeWizard}
+        title={`${editTarget ? "Edit Split" : "Split Bill"} — Step ${wizardStep} of 5`}
         footer={
           <div style={{ display: "flex", gap: "var(--space-2)", width: "100%", justifyContent: "flex-end" }}>
             {wizardStep > 1 && (
@@ -454,13 +576,15 @@ export default function SharedExpensesPage() {
                 Next →
               </button>
             ) : (
-              <button className="btn btn-primary" onClick={handleCreateShared} disabled={submitting || !isValid}>
-                {submitting ? "Splitting..." : "Split Expense"}
+              <button className="btn btn-primary" onClick={handleSubmitShared} disabled={submitting || !isValid}>
+                {submitting ? "Saving…" : editTarget ? "Save Changes" : "Split Expense"}
               </button>
             )}
           </div>
         }
       >
+        <WizardSteps step={wizardStep} onJump={(n) => { setWizardError(null); setWizardStep(n); }} />
+
         {wizardError && <ErrorBanner message={wizardError} onDismiss={() => setWizardError(null)} />}
 
         {/* STEP 1: Expense Details */}
@@ -473,7 +597,7 @@ export default function SharedExpensesPage() {
                 type="text"
                 required
                 placeholder="e.g. Pizza dinner"
-                className="input"
+                className={`input ${wizardError && !title.trim() ? "error" : ""}`}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />
@@ -485,7 +609,7 @@ export default function SharedExpensesPage() {
                   type="text"
                   required
                   placeholder="0.00"
-                  className="input input-amount"
+                  className={`input input-amount ${wizardError && !(totalAmount.trim() && parseFloat(totalAmount) > 0) ? "error" : ""}`}
                   value={totalAmount}
                   onChange={(e) => setTotalAmount(e.target.value)}
                 />
@@ -567,7 +691,7 @@ export default function SharedExpensesPage() {
                 />
                 <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>You (Myself)</span>
               </label>
-              {friends.map((f) => (
+              {activeFriends.map((f) => (
                 <label key={f.id} style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "8px", borderRadius: "var(--radius-sm)", cursor: "pointer", background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
                   <input
                     type="checkbox"
@@ -579,6 +703,12 @@ export default function SharedExpensesPage() {
                 </label>
               ))}
             </div>
+            {activeFriends.length === 0 && (
+              <p style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", margin: 0 }}>
+                No friends have accepted an invite yet.{" "}
+                <Link href="/friends" style={{ fontWeight: 600 }}>Invite a friend →</Link>
+              </p>
+            )}
           </div>
         )}
 
@@ -587,40 +717,18 @@ export default function SharedExpensesPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
             <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Who paid the bill?</h3>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
-              <button
-                type="button"
+              <Tile
+                selected={payerType === "USER"}
                 onClick={() => setPayerType("USER")}
-                style={{
-                  padding: "var(--space-5) var(--space-4)",
-                  borderRadius: "var(--radius-md)",
-                  border: `2px solid ${payerType === "USER" ? "var(--color-accent)" : "var(--color-border)"}`,
-                  background: payerType === "USER" ? "var(--color-accent-light)" : "var(--color-surface)",
-                  cursor: "pointer",
-                  fontWeight: 700,
-                  fontSize: "var(--text-base)",
-                  color: payerType === "USER" ? "var(--color-accent)" : "var(--color-text)",
-                  transition: "all var(--transition-fast)",
-                }}
-              >
-                🙋‍♂️ I paid
-              </button>
-              <button
-                type="button"
+                icon={User}
+                label="I paid"
+              />
+              <Tile
+                selected={payerType === "FRIEND"}
                 onClick={() => setPayerType("FRIEND")}
-                style={{
-                  padding: "var(--space-5) var(--space-4)",
-                  borderRadius: "var(--radius-md)",
-                  border: `2px solid ${payerType === "FRIEND" ? "var(--color-accent)" : "var(--color-border)"}`,
-                  background: payerType === "FRIEND" ? "var(--color-accent-light)" : "var(--color-surface)",
-                  cursor: "pointer",
-                  fontWeight: 700,
-                  fontSize: "var(--text-base)",
-                  color: payerType === "FRIEND" ? "var(--color-accent)" : "var(--color-text)",
-                  transition: "all var(--transition-fast)",
-                }}
-              >
-                👥 A friend paid
-              </button>
+                icon={Users}
+                label="A friend paid"
+              />
             </div>
 
             {payerType === "FRIEND" && (
@@ -632,11 +740,11 @@ export default function SharedExpensesPage() {
                   value={payerId}
                   onChange={(e) => setPayerId(e.target.value)}
                 >
-                  {friends.filter(f => selectedFriends[f.id]).map(f => (
+                  {activeFriends.filter(f => selectedFriends[f.id]).map(f => (
                     <option key={f.id} value={f.id}>{f.name}</option>
                   ))}
-                  {/* Fallback to all friends if none are selected yet in step 2 */}
-                  {friends.filter(f => !selectedFriends[f.id]).map(f => (
+                  {/* Fallback to all active friends if none are selected yet in step 2 */}
+                  {activeFriends.filter(f => !selectedFriends[f.id]).map(f => (
                     <option key={f.id} value={f.id}>{f.name} (not participant)</option>
                   ))}
                 </select>
@@ -649,27 +757,16 @@ export default function SharedExpensesPage() {
         {wizardStep === 4 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
             <h3 style={{ fontSize: "var(--text-base)", fontWeight: 700, margin: 0, color: "var(--color-accent)" }}>Choose Split Method</h3>
-            
+
             <div style={{ display: "flex", gap: "var(--space-2)" }}>
               {(["EQUAL", "CUSTOM_AMOUNT", "PERCENTAGE"] as const).map((method) => (
-                <button
-                  key={method}
-                  type="button"
-                  onClick={() => setSplitMethod(method)}
-                  style={{
-                    flex: 1,
-                    padding: "var(--space-2) var(--space-1)",
-                    borderRadius: "var(--radius-sm)",
-                    border: `1.5px solid ${splitMethod === method ? "var(--color-accent)" : "var(--color-border)"}`,
-                    background: splitMethod === method ? "var(--color-accent-light)" : "var(--color-surface)",
-                    fontSize: "11px",
-                    fontWeight: 700,
-                    color: splitMethod === method ? "var(--color-accent)" : "var(--color-text-secondary)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {method === "EQUAL" ? "Equally" : method === "CUSTOM_AMOUNT" ? "Amounts" : "Percentage"}
-                </button>
+                <div key={method} style={{ flex: 1 }}>
+                  <Tile
+                    selected={splitMethod === method}
+                    onClick={() => setSplitMethod(method)}
+                    label={method === "EQUAL" ? "Equally" : method === "CUSTOM_AMOUNT" ? "Amounts" : "Percentage"}
+                  />
+                </div>
               ))}
             </div>
 
@@ -747,7 +844,10 @@ export default function SharedExpensesPage() {
                 color: isValid ? "var(--color-success)" : "var(--color-danger)",
                 fontWeight: 700,
               }}>
-                <span>{isValid ? "✅ Reconciled" : "⚠️ Unreconciled"}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                  {isValid ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                  {isValid ? "Reconciled" : "Unreconciled"}
+                </span>
                 <span>{detailsText}</span>
               </div>
             </div>
@@ -812,11 +912,34 @@ export default function SharedExpensesPage() {
               fontWeight: 700,
               paddingTop: "var(--space-2)",
             }}>
-              <span>Status: {isValid ? "Valid ✓" : "Invalid ✗"}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                {isValid ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                Status: {isValid ? "Valid" : "Invalid"}
+              </span>
               {!isValid && <span>{detailsText}</span>}
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Delete Confirmation */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete Shared Expense"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick={handleDeleteShared} disabled={deleting}>
+              {deleting ? "Deleting…" : "Yes, Delete"}
+            </button>
+          </>
+        }
+      >
+        <p style={{ fontSize: "var(--text-base)", color: "var(--color-text)" }}>
+          Delete <strong>{deleteTarget?.title}</strong>? This removes it from everyone's balances too.
+        </p>
+        <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginTop: "var(--space-2)" }}>This action cannot be undone.</p>
       </Modal>
 
       <style jsx global>{`

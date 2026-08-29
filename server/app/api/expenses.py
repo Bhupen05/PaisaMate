@@ -36,7 +36,7 @@ async def get_expense(expense_id: str, user_id: str = Depends(get_current_user_i
     return await expense_service.get_expense(user_id, expense_id)
 
 
-@router.patch("/{expense_id}", response_model=ExpenseResponse)
+@router.put("/{expense_id}", response_model=ExpenseResponse)
 async def update_expense(
     expense_id: str,
     data: ExpenseUpdate,

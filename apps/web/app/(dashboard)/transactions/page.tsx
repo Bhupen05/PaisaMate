@@ -1,22 +1,42 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
 import { ClassificationBadge } from "@/components/finance/ClassificationBadge";
+import { MoneyAmount } from "@/components/finance/MoneyAmount";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
-import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { SkeletonRow } from "@/components/ui/Skeleton";
 import { Modal } from "@/components/ui/Modal";
+import Link from "next/link";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Inbox,
+  ShoppingCart,
+  Car,
+  Heart,
+  Clapperboard,
+  ShoppingBag,
+  Zap,
+  Home,
+  BookOpen,
+  User,
+  Package,
+  type LucideIcon,
+} from "lucide-react";
 
 const CATEGORIES = ["food","transport","health","entertainment","shopping","utilities","housing","education","personal","other"];
 const CLASSIFICATIONS: Array<"NEED"|"WANT"|"DREAM"> = ["NEED","WANT","DREAM"];
 
-const CATEGORY_ICONS: Record<string, string> = {
-  food: "🍔", transport: "🚗", health: "❤️", entertainment: "🎬",
-  shopping: "🛍️", utilities: "⚡", housing: "🏠", education: "📚",
-  personal: "👤", other: "📦",
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  food: ShoppingCart, transport: Car, health: Heart, entertainment: Clapperboard,
+  shopping: ShoppingBag, utilities: Zap, housing: Home, education: BookOpen,
+  personal: User, other: Package,
 };
 
 interface Expense {
@@ -27,6 +47,7 @@ interface Expense {
   expense_date: string;
   category_id: string | null;
   classification: "NEED" | "WANT" | "DREAM";
+  expense_type: "PERSONAL" | "SHARED";
   notes?: string;
   tags?: string[];
 }
@@ -44,12 +65,9 @@ const EMPTY_FORM = {
 export default function TransactionsPage() {
   const { user } = useAuthStore();
   const currency = user?.currency ?? "INR";
+  const queryClient = useQueryClient();
 
-  const [items, setItems] = useState<Expense[]>([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Filters
@@ -62,32 +80,58 @@ export default function TransactionsPage() {
   const [editTarget, setEditTarget] = useState<Expense | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const PAGE_SIZE = 10;
 
-  const fetchItems = useCallback(async (p = page) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ page: String(p), page_size: String(PAGE_SIZE) });
+  const listQuery = useQuery({
+    queryKey: ["expenses", { page, search, filterCategory, filterClass }],
+    queryFn: async () => {
+      const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
       if (search) params.set("search", search);
       if (filterCategory) params.set("category", filterCategory);
       if (filterClass) params.set("classification", filterClass);
       const res = await api.get(`/expenses?${params}`);
-      setItems(res.data.items ?? []);
-      setTotal(res.data.total ?? 0);
-      setTotalPages(Math.max(1, Math.ceil((res.data.total ?? 0) / PAGE_SIZE)));
-    } catch {
-      setError("Unable to load transactions. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search, filterCategory, filterClass]);
+      return { items: (res.data.items ?? []) as Expense[], total: (res.data.total ?? 0) as number };
+    },
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => { fetchItems(1); setPage(1); }, [search, filterCategory, filterClass]);
-  useEffect(() => { fetchItems(page); }, [page]);
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const loading = listQuery.isPending;
+
+  const invalidateExpenses = () => {
+    queryClient.invalidateQueries({ queryKey: ["expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["analytics-summary"] });
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) =>
+      editTarget ? api.put(`/expenses/${editTarget.id}`, payload) : api.post("/expenses", payload),
+    onSuccess: () => {
+      invalidateExpenses();
+      setShowAdd(false);
+      setEditTarget(null);
+    },
+    onError: (err: any) => setFormError(err.response?.data?.detail || "Unable to save expense. Please try again."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/expenses/${id}`),
+    onSuccess: () => {
+      invalidateExpenses();
+      setDeleteTarget(null);
+    },
+    onError: (err: any) => {
+      setError(err.response?.data?.detail || "Unable to delete expense. Please try again.");
+      setDeleteTarget(null);
+    },
+  });
+
+  const submitting = saveMutation.isPending || deleteMutation.isPending;
 
   const openAdd = () => { setForm({ ...EMPTY_FORM, currency }); setFormError(null); setShowAdd(true); };
   const openEdit = (exp: Expense) => {
@@ -104,16 +148,15 @@ export default function TransactionsPage() {
     setFormError(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amountMinor = Math.round(parseFloat(form.amount) * 100);
     if (!form.title.trim() || isNaN(amountMinor) || amountMinor <= 0) {
       setFormError("Please enter a valid title and amount greater than 0.");
       return;
     }
-    setSubmitting(true);
     setFormError(null);
-    const payload = {
+    saveMutation.mutate({
       title: form.title.trim(),
       amount_minor: amountMinor,
       currency: form.currency,
@@ -122,40 +165,19 @@ export default function TransactionsPage() {
       classification: form.classification,
       notes: form.notes,
       tags: [],
-    };
-    try {
-      if (editTarget) {
-        await api.put(`/expenses/${editTarget.id}`, payload);
-        setEditTarget(null);
-      } else {
-        await api.post("/expenses", payload);
-        setShowAdd(false);
-      }
-      fetchItems(page);
-    } catch (err: any) {
-      setFormError(err.response?.data?.detail || "Unable to save expense. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
+    });
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteTarget) return;
-    setSubmitting(true);
-    try {
-      await api.delete(`/expenses/${deleteTarget.id}`);
-      setDeleteTarget(null);
-      fetchItems(page);
-    } catch {
-      setError("Unable to delete expense. Please try again.");
-      setDeleteTarget(null);
-    } finally {
-      setSubmitting(false);
-    }
+    deleteMutation.mutate(deleteTarget.id);
   };
+
+  const clearFilters = () => { setSearch(""); setFilterCategory(""); setFilterClass(""); setPage(1); };
 
   const totalMinor = items.reduce((s, e) => s + e.amount_minor, 0);
   const hasFilters = !!(search || filterCategory || filterClass);
+  const listErrorMessage = listQuery.isError ? "Unable to load transactions. Please try again." : null;
 
   return (
     <div className="animate-fade-in">
@@ -167,10 +189,10 @@ export default function TransactionsPage() {
             Track and manage your personal expenses
           </p>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>+ Add Expense</button>
+        <button className="btn btn-primary" onClick={openAdd}><Plus size={16} /> Add Expense</button>
       </div>
 
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {(error || listErrorMessage) && <ErrorBanner message={error ?? listErrorMessage!} onDismiss={() => setError(null)} />}
 
       {/* Filters */}
       <div style={{
@@ -185,14 +207,14 @@ export default function TransactionsPage() {
           style={{ flex: "1 1 200px", maxWidth: 320 }}
           placeholder="Search expenses…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
           aria-label="Search expenses"
         />
         <select
           className="input"
           style={{ flex: "0 0 160px", padding: "0 var(--space-3)" }}
           value={filterCategory}
-          onChange={e => setFilterCategory(e.target.value)}
+          onChange={e => { setFilterCategory(e.target.value); setPage(1); }}
           aria-label="Filter by category"
         >
           <option value="">All Categories</option>
@@ -202,7 +224,7 @@ export default function TransactionsPage() {
           className="input"
           style={{ flex: "0 0 160px", padding: "0 var(--space-3)" }}
           value={filterClass}
-          onChange={e => setFilterClass(e.target.value)}
+          onChange={e => { setFilterClass(e.target.value); setPage(1); }}
           aria-label="Filter by classification"
         >
           <option value="">All Types</option>
@@ -211,7 +233,7 @@ export default function TransactionsPage() {
           <option value="DREAM">Dream</option>
         </select>
         {hasFilters && (
-          <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(""); setFilterCategory(""); setFilterClass(""); }}>
+          <button className="btn btn-ghost btn-sm" onClick={clearFilters}>
             Clear filters
           </button>
         )}
@@ -238,17 +260,17 @@ export default function TransactionsPage() {
 
       {/* Content */}
       {loading ? (
-        <div className="card" style={{ padding: "var(--space-6)" }}>
-          <LoadingSpinner centered />
+        <div className="card" style={{ padding: "var(--space-2) var(--space-4)" }}>
+          {Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)}
         </div>
       ) : items.length === 0 ? (
         <div className="card">
           <EmptyState
-            icon="📭"
+            icon={<Inbox size={40} />}
             title={hasFilters ? "No matches found" : "No expenses yet"}
             description={hasFilters ? "Try clearing your filters." : "Add your first expense to start tracking your spending."}
             actionLabel={hasFilters ? "Clear filters" : "Add Expense"}
-            onAction={hasFilters ? () => { setSearch(""); setFilterCategory(""); setFilterClass(""); } : openAdd}
+            onAction={hasFilters ? clearFilters : openAdd}
           />
         </div>
       ) : (
@@ -273,34 +295,50 @@ export default function TransactionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map(exp => (
-                  <tr key={exp.id} style={{ borderBottom: "1px solid var(--color-border)" }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "var(--color-surface-2)")}
-                    onMouseLeave={e => (e.currentTarget.style.background = "")}>
-                    <td style={{ padding: "var(--space-3) var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>{exp.expense_date}</td>
-                    <td style={{ padding: "var(--space-3) var(--space-4)", fontWeight: 600, fontSize: "var(--text-sm)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                        <span>{CATEGORY_ICONS[exp.category_id ?? "other"] ?? "📦"}</span>
-                        {exp.title}
-                      </div>
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", textTransform: "capitalize" }}>
-                      {exp.category_id ?? "other"}
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-4)" }}>
-                      <ClassificationBadge value={exp.classification} />
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-4)", textAlign: "right" }}>
-                      <span className="amount amount-negative">{formatMinor(exp.amount_minor, exp.currency)}</span>
-                    </td>
-                    <td style={{ padding: "var(--space-3) var(--space-4)", whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exp)} aria-label={`Edit ${exp.title}`}>Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(exp)} aria-label={`Delete ${exp.title}`}>Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {items.map(exp => {
+                  const CategoryIcon = CATEGORY_ICONS[exp.category_id ?? "other"] ?? Package;
+                  return (
+                    <tr key={exp.id} style={{ borderBottom: "1px solid var(--color-border)" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "var(--color-surface-2)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "")}>
+                      <td style={{ padding: "var(--space-3) var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>{exp.expense_date}</td>
+                      <td style={{ padding: "var(--space-3) var(--space-4)", fontWeight: 600, fontSize: "var(--text-sm)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                          <div className="list-row-icon" style={{ width: 28, height: 28 }}>
+                            <CategoryIcon size={14} />
+                          </div>
+                          {exp.title}
+                          {exp.expense_type === "SHARED" && (
+                            <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--color-accent)", background: "var(--color-accent-light)", padding: "1px 6px", borderRadius: "var(--radius-full)" }}>
+                              Shared · your share
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", textTransform: "capitalize" }}>
+                        {exp.category_id ?? "other"}
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-4)" }}>
+                        <ClassificationBadge value={exp.classification} />
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-4)", textAlign: "right" }}>
+                        <MoneyAmount amountMinor={exp.amount_minor} currency={exp.currency} variant="negative" size="sm" />
+                      </td>
+                      <td style={{ padding: "var(--space-3) var(--space-4)", whiteSpace: "nowrap" }}>
+                        <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
+                          {exp.expense_type === "SHARED" ? (
+                            <Link href="/shared" className="btn btn-ghost btn-sm" style={{ textDecoration: "none" }}>Manage in Shared →</Link>
+                          ) : (
+                            <>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exp)} aria-label={`Edit ${exp.title}`}><Pencil size={13} /> Edit</button>
+                              <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(exp)} aria-label={`Delete ${exp.title}`}><Trash2 size={13} /> Delete</button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -316,13 +354,24 @@ export default function TransactionsPage() {
                       <ClassificationBadge value={exp.classification} />
                       <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "capitalize" }}>{exp.category_id ?? "other"}</span>
                       <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>{exp.expense_date}</span>
+                      {exp.expense_type === "SHARED" && (
+                        <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--color-accent)", background: "var(--color-accent-light)", padding: "1px 6px", borderRadius: "var(--radius-full)" }}>
+                          Shared
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--space-2)", flexShrink: 0, marginLeft: "var(--space-3)" }}>
-                    <span className="amount amount-negative" style={{ fontSize: "var(--text-lg)" }}>{formatMinor(exp.amount_minor, exp.currency)}</span>
+                    <MoneyAmount amountMinor={exp.amount_minor} currency={exp.currency} variant="negative" size="lg" />
                     <div style={{ display: "flex", gap: "var(--space-2)" }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exp)}>Edit</button>
-                      <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(exp)}>Del</button>
+                      {exp.expense_type === "SHARED" ? (
+                        <Link href="/shared" className="btn btn-ghost btn-sm" style={{ textDecoration: "none" }}>Manage →</Link>
+                      ) : (
+                        <>
+                          <button className="btn btn-ghost btn-sm" onClick={() => openEdit(exp)}><Pencil size={13} /></button>
+                          <button className="btn btn-danger btn-sm" onClick={() => setDeleteTarget(exp)}><Trash2 size={13} /></button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -359,12 +408,12 @@ export default function TransactionsPage() {
         <form id="expense-form" onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" htmlFor="exp-title">Title</label>
-            <input id="exp-title" className="input" required value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Groceries" />
+            <input id="exp-title" className={`input ${formError && !form.title.trim() ? "error" : ""}`} required value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Groceries" />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "var(--space-3)" }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label" htmlFor="exp-amount">Amount</label>
-              <input id="exp-amount" className="input input-amount" required type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" />
+              <input id="exp-amount" className={`input input-amount ${formError && !(form.amount && Math.round(parseFloat(form.amount) * 100) > 0) ? "error" : ""}`} required type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label" htmlFor="exp-currency">Currency</label>

@@ -9,6 +9,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       queries: {
         refetchOnWindowFocus: false,
         retry: false,
+        // Cached data renders instantly when navigating back to a page;
+        // a background refetch (not a blocking skeleton) keeps it current.
+        staleTime: 30_000,
       },
     },
   }));

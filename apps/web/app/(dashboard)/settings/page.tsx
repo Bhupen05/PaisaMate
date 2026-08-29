@@ -4,7 +4,10 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
+import { SuccessBanner } from "@/components/ui/SuccessBanner";
 import { Modal } from "@/components/ui/Modal";
+import { Tile } from "@/components/ui/Tile";
+import { Sun, Moon, LogOut } from "lucide-react";
 
 export default function SettingsPage() {
   const { user, updateUser, logout } = useAuthStore();
@@ -66,14 +69,7 @@ export default function SettingsPage() {
         <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-5)" }}>Profile</h2>
 
         {success && (
-          <div style={{
-            background: "var(--color-success-bg)", color: "var(--color-success)",
-            border: "1px solid var(--color-success)", borderRadius: "var(--radius-md)",
-            padding: "var(--space-3) var(--space-4)", fontSize: "var(--text-sm)",
-            marginBottom: "var(--space-4)",
-          }}>
-            ✓ Settings saved successfully.
-          </div>
+          <SuccessBanner message="Settings saved successfully." onDismiss={() => setSuccess(false)} />
         )}
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
@@ -109,26 +105,14 @@ export default function SettingsPage() {
         <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-4)" }}>Appearance</h2>
         <div style={{ display: "flex", gap: "var(--space-3)" }}>
           {(["light", "dark"] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => handleTheme(t)}
-              style={{
-                flex: 1,
-                padding: "var(--space-4)",
-                borderRadius: "var(--radius-md)",
-                border: `2px solid ${theme === t ? "var(--color-accent)" : "var(--color-border)"}`,
-                background: theme === t ? "var(--color-accent-light)" : "var(--color-surface-2)",
-                cursor: "pointer",
-                display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-2)",
-                transition: "all var(--transition-fast)",
-              }}
-              aria-pressed={theme === t}
-            >
-              <span style={{ fontSize: 24 }}>{t === "light" ? "☀️" : "🌙"}</span>
-              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: theme === t ? "var(--color-accent)" : "var(--color-text)" }}>
-                {t.charAt(0).toUpperCase() + t.slice(1)}
-              </span>
-            </button>
+            <div key={t} style={{ flex: 1 }}>
+              <Tile
+                selected={theme === t}
+                onClick={() => handleTheme(t)}
+                icon={t === "light" ? Sun : Moon}
+                label={t.charAt(0).toUpperCase() + t.slice(1)}
+              />
+            </div>
           ))}
         </div>
       </section>
@@ -139,7 +123,7 @@ export default function SettingsPage() {
         <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", marginBottom: "var(--space-4)" }}>
           Signed in as <strong>{user?.email}</strong>
         </p>
-        <button className="btn btn-danger" onClick={() => setShowLogout(true)}>Sign Out</button>
+        <button className="btn btn-danger" onClick={() => setShowLogout(true)}><LogOut size={14} /> Sign Out</button>
       </section>
 
       {/* Logout Confirm */}

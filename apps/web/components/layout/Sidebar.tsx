@@ -4,17 +4,31 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuthStore } from "@/store/authStore";
 import { useEffect, useState } from "react";
+import {
+  LayoutDashboard,
+  ReceiptText,
+  Users,
+  Handshake,
+  Wallet,
+  Repeat,
+  BarChart3,
+  Settings as SettingsIcon,
+  Moon,
+  Sun,
+  LogOut,
+} from "lucide-react";
 
 const NAV_ITEMS = [
-  { label: "Dashboard", path: "/dashboard", icon: "📊" },
-  { label: "Transactions", path: "/transactions", icon: "💸" },
-  { label: "Friends", path: "/friends", icon: "🤝" },
-  { label: "Shared", path: "/shared", icon: "⚖️" },
-  { label: "Settlements", path: "/settlements", icon: "💳" },
-  { label: "Recurring", path: "/recurring", icon: "🔁" },
-  { label: "Analytics", path: "/analytics", icon: "📈" },
-  { label: "Settings", path: "/settings", icon: "⚙️" },
+  { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
+  { label: "Transactions", path: "/transactions", icon: ReceiptText },
+  { label: "Friends", path: "/friends", icon: Users },
+  { label: "Shared", path: "/shared", icon: Handshake },
+  { label: "Settlements", path: "/settlements", icon: Wallet },
+  { label: "Recurring", path: "/recurring", icon: Repeat },
+  { label: "Analytics", path: "/analytics", icon: BarChart3 },
 ];
+
+const SETTINGS_ITEM = { label: "Settings", path: "/settings", icon: SettingsIcon };
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -23,7 +37,7 @@ export default function Sidebar() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
-    const activeTheme = document.documentElement.getAttribute("data-theme") as "light" | "dark" || "light";
+    const activeTheme = (document.documentElement.getAttribute("data-theme") as "light" | "dark") || "light";
     setTheme(activeTheme);
   }, []);
 
@@ -39,10 +53,26 @@ export default function Sidebar() {
     router.push("/login");
   };
 
+  const navLinkStyle = (isActive: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    padding: "10px 12px",
+    borderRadius: "10px",
+    fontSize: "13px",
+    fontWeight: isActive ? 600 : 500,
+    textDecoration: "none",
+    color: isActive ? "#FFFFFF" : "var(--color-text-secondary)",
+    background: isActive ? "var(--color-accent)" : "transparent",
+    boxShadow: isActive ? "var(--shadow-xs)" : "none",
+    transition: "background var(--transition-fast), color var(--transition-fast)",
+    letterSpacing: "0.01em",
+  });
+
   return (
     <aside className="sidebar-container" style={{
       width: "var(--sidebar-width)",
-      backgroundColor: "var(--color-surface)",
+      backgroundColor: "var(--color-bg)",
       borderRight: "1px solid var(--color-border)",
       display: "flex",
       flexDirection: "column",
@@ -51,33 +81,55 @@ export default function Sidebar() {
       left: 0,
       top: 0,
       zIndex: 100,
-      transition: "width var(--transition-normal)",
       overflow: "hidden",
     }}>
       {/* Brand Header */}
       <div style={{
-        padding: "var(--space-6) var(--space-5)",
+        padding: "18px 16px",
         borderBottom: "1px solid var(--color-border)",
         display: "flex",
         alignItems: "center",
-        gap: "var(--space-2)",
+        gap: "12px",
       }}>
-        <span style={{ fontSize: "24px" }}>🪙</span>
-        <h1 style={{
-          fontSize: "var(--text-lg)",
-          fontWeight: 800,
-          color: "var(--color-primary)",
-          letterSpacing: "-0.03em",
-          margin: 0,
-        }}>
-          SURATY
-        </h1>
+        <div style={{
+          width: "36px",
+          height: "36px",
+          borderRadius: "10px",
+          background: "var(--color-accent)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: "18px",
+          flexShrink: 0,
+          boxShadow: "var(--shadow-xs)",
+        }}>🪙</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontSize: "18px",
+            lineHeight: "22px",
+            fontWeight: 800,
+            color: "var(--color-text)",
+            letterSpacing: "-0.02em",
+          }}>
+            Suraty
+          </div>
+          <p style={{
+            fontSize: "10px",
+            fontWeight: 700,
+            color: "var(--color-text-muted)",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            margin: 0,
+          }}>
+            Personal Finance
+          </p>
+        </div>
       </div>
 
       {/* Navigation List */}
-      <nav style={{
+      <nav className="custom-scrollbar" style={{
         flex: 1,
-        padding: "var(--space-4) var(--space-3)",
+        padding: "12px",
         display: "flex",
         flexDirection: "column",
         gap: "4px",
@@ -85,76 +137,81 @@ export default function Sidebar() {
       }}>
         {NAV_ITEMS.map((item) => {
           const isActive = pathname === item.path;
+          const Icon = item.icon;
           return (
             <Link
               key={item.path}
               href={item.path}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "var(--space-3)",
-                padding: "var(--space-2) var(--space-4)",
-                borderRadius: "var(--radius-md)",
-                color: isActive ? "var(--color-accent)" : "var(--color-text-secondary)",
-                backgroundColor: isActive ? "var(--color-accent-light)" : "transparent",
-                fontWeight: isActive ? 600 : 500,
-                fontSize: "var(--text-sm)",
-                transition: "all var(--transition-fast)",
-                textDecoration: "none",
-              }}
-              className="sidebar-link"
+              style={navLinkStyle(isActive)}
+              className={isActive ? "sidebar-link sidebar-link-active" : "sidebar-link"}
             >
-              <span style={{ fontSize: "16px" }}>{item.icon}</span>
+              <Icon size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
               <span>{item.label}</span>
             </Link>
           );
         })}
+
+        {/* Settings pinned toward bottom */}
+        <div style={{ marginTop: "auto", paddingTop: "8px", borderTop: "1px solid var(--color-border)" }}>
+          <Link
+            href={SETTINGS_ITEM.path}
+            style={navLinkStyle(pathname === SETTINGS_ITEM.path)}
+            className={pathname === SETTINGS_ITEM.path ? "sidebar-link sidebar-link-active" : "sidebar-link"}
+          >
+            <SettingsIcon size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
+            <span>Settings</span>
+          </Link>
+        </div>
       </nav>
 
       {/* Footer Profile & Actions */}
       <div style={{
-        padding: "var(--space-4)",
+        padding: "12px",
         borderTop: "1px solid var(--color-border)",
+        backgroundColor: "var(--color-bg-secondary)",
         display: "flex",
         flexDirection: "column",
-        gap: "var(--space-3)",
+        gap: "10px",
       }}>
         {/* User Card */}
         {user && (
           <div style={{
             display: "flex",
             alignItems: "center",
-            gap: "var(--space-3)",
-            padding: "var(--space-2)",
-            borderRadius: "var(--radius-md)",
-            backgroundColor: "var(--color-surface-2)",
+            gap: "10px",
+            padding: "8px",
+            borderRadius: "10px",
           }}>
             <div style={{
-              width: "32px",
-              height: "32px",
+              width: "34px",
+              height: "34px",
               borderRadius: "50%",
               backgroundColor: "var(--color-accent)",
-              color: "white",
+              color: "#FFFFFF",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontWeight: 700,
-              fontSize: "var(--text-xs)",
+              fontSize: "12px",
               textTransform: "uppercase",
+              flexShrink: 0,
+              boxShadow: "var(--shadow-xs)",
             }}>
               {user.name.slice(0, 2)}
             </div>
-            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
               <div style={{
-                fontSize: "var(--text-xs)",
+                fontSize: "13px",
                 fontWeight: 600,
                 color: "var(--color-text)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
               }}>
                 {user.name}
               </div>
               <div style={{
                 fontSize: "10px",
-                color: "var(--color-text-secondary)",
+                color: "var(--color-text-muted)",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
               }}>
@@ -169,15 +226,16 @@ export default function Sidebar() {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: "var(--space-2)",
+          gap: "8px",
         }}>
           <button
             onClick={toggleTheme}
             className="btn btn-secondary btn-sm"
-            style={{ flex: 1, fontSize: "11px", height: "30px" }}
+            style={{ flex: 1, fontSize: "11px", height: "30px", gap: "6px" }}
             title="Toggle theme"
           >
-            {theme === "light" ? "🌙 Dark" : "☀️ Light"}
+            {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
+            {theme === "light" ? "Dark" : "Light"}
           </button>
           <button
             onClick={handleLogout}
@@ -186,20 +244,21 @@ export default function Sidebar() {
               flex: 1,
               fontSize: "11px",
               height: "30px",
+              gap: "6px",
               color: "var(--color-danger)",
               border: "1px solid transparent",
             }}
           >
-            🚪 Logout
+            <LogOut size={13} />
+            Logout
           </button>
         </div>
       </div>
 
       <style jsx global>{`
-        .sidebar-link:hover {
+        .sidebar-link:not(.sidebar-link-active):hover {
           background-color: var(--color-surface-2) !important;
           color: var(--color-text) !important;
-          transform: translateX(2px);
         }
         @media (max-width: 768px) {
           .sidebar-container {

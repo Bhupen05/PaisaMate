@@ -6,15 +6,19 @@ import { useAuthStore } from "@/store/authStore";
 
 export default function Home() {
   const router = useRouter();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, hasHydrated } = useAuthStore();
 
   useEffect(() => {
+    // Wait for persisted auth state to be read back before deciding —
+    // otherwise a logged-in user hitting "/" directly always bounces to
+    // /login because isAuthenticated defaults to false pre-hydration.
+    if (!hasHydrated) return;
     if (isAuthenticated) {
       router.replace("/dashboard");
     } else {
       router.replace("/login");
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, hasHydrated, router]);
 
   return (
     <div style={{

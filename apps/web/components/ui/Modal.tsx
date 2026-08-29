@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { X } from "lucide-react";
 
 interface ModalProps {
   open: boolean;
@@ -13,8 +14,14 @@ interface ModalProps {
 
 export function Modal({ open, onClose, title, children, width = "480px", footer }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
-  // Trap focus inside modal
+  // Trap focus inside modal. Deliberately depends only on `open` — most
+  // callers pass an inline `onClose` closure that gets a new identity on
+  // every parent re-render (e.g. typing in a form field), which would
+  // otherwise re-run this effect and re-focus the first focusable element
+  // (the header's Close button) after every keystroke.
   useEffect(() => {
     if (!open) return;
     const el = dialogRef.current;
@@ -22,10 +29,18 @@ export function Modal({ open, onClose, title, children, width = "480px", footer 
     const focusable = el.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
     );
-    if (focusable.length) focusable[0].focus();
+    if (focusable.length) {
+      // Land focus on the first real input inside the body, not the header's
+      // Close button — that's what's first in DOM order but rarely what the
+      // user opened the modal to interact with.
+      const firstField = el.querySelector<HTMLElement>(
+        'input:not([type="hidden"]), select, textarea'
+      );
+      (firstField ?? focusable[0]).focus();
+    }
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { onClose(); return; }
+      if (e.key === "Escape") { onCloseRef.current(); return; }
       if (e.key !== "Tab") return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -37,7 +52,7 @@ export function Modal({ open, onClose, title, children, width = "480px", footer 
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  }, [open]);
 
   // Lock body scroll
   useEffect(() => {
@@ -70,7 +85,7 @@ export function Modal({ open, onClose, title, children, width = "480px", footer 
         style={{
           background: "var(--color-surface)",
           border: "1px solid var(--color-border)",
-          borderRadius: "var(--radius-lg)",
+          borderRadius: "var(--radius-xl)",
           boxShadow: "var(--shadow-xl)",
           width: "100%",
           maxWidth: width,
@@ -85,19 +100,19 @@ export function Modal({ open, onClose, title, children, width = "480px", footer 
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "var(--space-5) var(--space-6)",
+          padding: "var(--space-6)",
           borderBottom: "1px solid var(--color-border)",
           flexShrink: 0,
         }}>
-          <h2 style={{ fontSize: "var(--text-lg)", fontWeight: 700, color: "var(--color-text)", margin: 0 }}>
+          <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--color-text)", margin: 0 }}>
             {title}
           </h2>
           <button
             aria-label="Close modal"
             onClick={onClose}
             className="btn btn-ghost btn-sm"
-            style={{ fontSize: "var(--text-xl)", width: 32, height: 32, padding: 0 }}
-          >×</button>
+            style={{ width: 32, height: 32, padding: 0 }}
+          ><X size={16} /></button>
         </div>
 
         {/* Body */}

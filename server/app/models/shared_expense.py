@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models.common import PersonType, SettlementStatus, SplitMethod
+from app.models.common import Classification, PersonType, SettlementStatus, SplitMethod
 
 
 class ParticipantCreate(BaseModel):
@@ -18,6 +18,7 @@ class SharedExpenseCreate(BaseModel):
     currency: str = Field(default="INR", max_length=3)
     expense_date: date
     category_id: str | None = None
+    classification: Classification = Classification.NEED
     payer_type: PersonType
     payer_id: str
     participants: list[ParticipantCreate] = Field(..., min_length=1)
@@ -60,9 +61,11 @@ class SharedExpenseResponse(BaseModel):
     owner_user_id: str
     title: str
     total_amount_minor: int
+    your_share_minor: int
     currency: str
     expense_date: date
     category_id: str | None
+    classification: Classification
     payer_type: PersonType
     payer_id: str
     split_method: SplitMethod

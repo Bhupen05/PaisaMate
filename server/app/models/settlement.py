@@ -2,31 +2,25 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.common import PersonType
+from app.models.common import SettlementDirection
 
 
 class SettlementCreate(BaseModel):
-    from_person_type: PersonType
-    from_person_id: str
-    to_person_type: PersonType
-    to_person_id: str
+    friend_id: str
     amount_minor: int = Field(..., gt=0)
     currency: str = Field(default="INR", max_length=3)
+    direction: SettlementDirection
     settlement_date: date
-    note: str | None = Field(default=None, max_length=500)
-    reference: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class SettlementResponse(BaseModel):
     id: str
-    owner_user_id: str
-    from_person_type: PersonType
-    from_person_id: str
-    to_person_type: PersonType
-    to_person_id: str
+    friend_id: str
+    friend_name: str
     amount_minor: int
     currency: str
+    direction: SettlementDirection
     settlement_date: date
-    note: str | None
-    reference: str | None
+    notes: str | None
     created_at: datetime

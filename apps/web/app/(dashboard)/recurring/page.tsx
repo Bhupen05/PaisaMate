@@ -1,14 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
 import { ClassificationBadge } from "@/components/finance/ClassificationBadge";
+import { StatusBadge } from "@/components/finance/StatusBadge";
+import { StatCard } from "@/components/finance/StatCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { Modal } from "@/components/ui/Modal";
+import { Plus, Pencil, Trash2, Pause, Play, Repeat } from "lucide-react";
 
 const CATEGORIES = ["food","transport","health","entertainment","shopping","utilities","housing","education","personal","other"];
 
@@ -19,9 +23,8 @@ interface RecurringTemplate {
   currency: string;
   category_id: string;
   classification: "NEED" | "WANT" | "DREAM";
-  day_of_month: number;
+  billing_day: number;
   is_active: boolean;
-  is_shared: boolean;
 }
 
 const EMPTY_FORM = {
@@ -29,80 +32,82 @@ const EMPTY_FORM = {
   amount: "",
   category_id: "other",
   classification: "NEED" as "NEED"|"WANT"|"DREAM",
-  day_of_month: 1,
-  is_shared: false,
+  billing_day: 1,
 };
 
 export default function RecurringPage() {
   const { user } = useAuthStore();
   const currency = user?.currency ?? "INR";
 
-  const [items, setItems] = useState<RecurringTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
 
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<RecurringTemplate | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RecurringTemplate | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const fetchItems = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.get("/recurring");
-      setItems(res.data ?? []);
-    } catch {
-      setError("Unable to load recurring templates. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+  const itemsQuery = useQuery({
+    queryKey: ["recurring"],
+    queryFn: async () => (await api.get<RecurringTemplate[]>("/recurring")).data ?? [],
+  });
+  const items = itemsQuery.data ?? [];
+  const loading = itemsQuery.isPending;
+
+  const invalidateRecurring = () => {
+    queryClient.invalidateQueries({ queryKey: ["recurring"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
   };
 
-  useEffect(() => { fetchItems(); }, []);
+  const saveMutation = useMutation({
+    mutationFn: (payload: Record<string, unknown>) =>
+      editTarget ? api.put(`/recurring/${editTarget.id}`, payload) : api.post("/recurring", payload),
+    onSuccess: () => {
+      invalidateRecurring();
+      setShowAdd(false);
+      setEditTarget(null);
+    },
+    onError: (err: any) => setFormError(err.response?.data?.detail || "Unable to save. Please try again."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/recurring/${id}`),
+    onSuccess: () => {
+      invalidateRecurring();
+      setDeleteTarget(null);
+    },
+    onError: () => { setError("Unable to delete. Please try again."); setDeleteTarget(null); },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: (r: RecurringTemplate) => api.post(`/recurring/${r.id}/${r.is_active ? "pause" : "resume"}`),
+    onSuccess: invalidateRecurring,
+    onError: () => setError("Unable to update status."),
+  });
+
+  const submitting = saveMutation.isPending || deleteMutation.isPending;
 
   const openAdd = () => { setForm(EMPTY_FORM); setFormError(null); setShowAdd(true); };
   const openEdit = (r: RecurringTemplate) => {
     setEditTarget(r);
-    setForm({ title: r.title, amount: String(r.amount_minor / 100), category_id: r.category_id, classification: r.classification, day_of_month: r.day_of_month, is_shared: r.is_shared });
+    setForm({ title: r.title, amount: String(r.amount_minor / 100), category_id: r.category_id, classification: r.classification, billing_day: r.billing_day });
     setFormError(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amountMinor = Math.round(parseFloat(form.amount) * 100);
     if (!form.title.trim() || isNaN(amountMinor) || amountMinor <= 0) {
       setFormError("Please enter a valid title and amount."); return;
     }
-    setSubmitting(true); setFormError(null);
-    const payload = { title: form.title.trim(), amount_minor: amountMinor, currency, category_id: form.category_id, classification: form.classification, day_of_month: form.day_of_month, is_shared: form.is_shared };
-    try {
-      if (editTarget) { await api.put(`/recurring/${editTarget.id}`, payload); setEditTarget(null); }
-      else { await api.post("/recurring", payload); setShowAdd(false); }
-      fetchItems();
-    } catch (err: any) {
-      setFormError(err.response?.data?.detail || "Unable to save. Please try again.");
-    } finally { setSubmitting(false); }
+    setFormError(null);
+    saveMutation.mutate({ title: form.title.trim(), amount_minor: amountMinor, currency, category_id: form.category_id, classification: form.classification, billing_day: form.billing_day });
   };
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    setSubmitting(true);
-    try {
-      await api.delete(`/recurring/${deleteTarget.id}`);
-      setDeleteTarget(null); fetchItems();
-    } catch { setError("Unable to delete. Please try again."); setDeleteTarget(null); }
-    finally { setSubmitting(false); }
-  };
+  const handleDelete = () => { if (deleteTarget) deleteMutation.mutate(deleteTarget.id); };
 
-  const toggleStatus = async (r: RecurringTemplate) => {
-    try {
-      await api.post(`/recurring/${r.id}/${r.is_active ? "pause" : "resume"}`);
-      fetchItems();
-    } catch { setError("Unable to update status."); }
-  };
+  const toggleStatus = (r: RecurringTemplate) => toggleMutation.mutate(r);
 
   const active = items.filter(r => r.is_active);
   const paused = items.filter(r => !r.is_active);
@@ -114,16 +119,16 @@ export default function RecurringPage() {
       <form id="recurring-form" onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label" htmlFor="rec-title">Title</label>
-          <input id="rec-title" className="input" required value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Netflix" />
+          <input id="rec-title" className={`input ${formError && !form.title.trim() ? "error" : ""}`} required value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Netflix" />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "var(--space-3)" }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" htmlFor="rec-amount">Amount ({currency})</label>
-            <input id="rec-amount" className="input input-amount" required type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" />
+            <input id="rec-amount" className={`input input-amount ${formError && !(form.amount && Math.round(parseFloat(form.amount) * 100) > 0) ? "error" : ""}`} required type="number" min="0.01" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" htmlFor="rec-day">Day of Month</label>
-            <input id="rec-day" className="input" type="number" min={1} max={31} value={form.day_of_month} onChange={e => setForm(f => ({ ...f, day_of_month: Number(e.target.value) }))} />
+            <input id="rec-day" className="input" type="number" min={1} max={28} value={form.billing_day} onChange={e => setForm(f => ({ ...f, billing_day: Number(e.target.value) }))} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
@@ -153,22 +158,28 @@ export default function RecurringPage() {
           <h1 className="page-title">Recurring</h1>
           <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: 2 }}>Manage your monthly commitments</p>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>+ Add Recurring</button>
+        <button className="btn btn-primary" onClick={openAdd}><Plus size={16} /> Add Recurring</button>
       </div>
 
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {(error || itemsQuery.isError) && (
+        <ErrorBanner message={error ?? "Unable to load recurring templates. Please try again."} onDismiss={() => setError(null)} />
+      )}
 
       {loading ? <LoadingSpinner centered /> : items.length === 0 ? (
         <div className="card">
-          <EmptyState icon="↻" title="No recurring items" description="Add subscriptions and bills so Suraty can track your monthly obligations." actionLabel="Add Recurring" onAction={openAdd} />
+          <EmptyState icon={<Repeat size={40} />} title="No recurring items" description="Add subscriptions and bills so Suraty can track your monthly obligations." actionLabel="Add Recurring" onAction={openAdd} />
         </div>
       ) : (
         <>
           {/* Summary */}
           {monthlyTotal > 0 && (
-            <div className="card" style={{ padding: "var(--space-4) var(--space-5)", marginBottom: "var(--space-5)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)" }}>Total monthly commitment ({active.length} active)</span>
-              <span className="amount amount-negative" style={{ fontSize: "var(--text-xl)", fontWeight: 700 }}>{formatMinor(monthlyTotal, currency)}</span>
+            <div style={{ marginBottom: "var(--space-5)" }}>
+              <StatCard
+                variant="hero"
+                label="Total Monthly Commitment"
+                value={formatMinor(monthlyTotal, currency)}
+                sub={`${active.length} active`}
+              />
             </div>
           )}
 
@@ -231,24 +242,21 @@ function RecurringCard({ item, currency, onEdit, onDelete, onToggle }: {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
           <span style={{ fontWeight: 700, fontSize: "var(--text-base)" }}>{item.title}</span>
-          {item.is_active ? (
-            <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--color-success)", background: "var(--color-success-bg)", padding: "2px 8px", borderRadius: "var(--radius-full)" }}>Active</span>
-          ) : (
-            <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--color-warning)", background: "var(--color-warning-bg)", padding: "2px 8px", borderRadius: "var(--radius-full)" }}>Paused</span>
-          )}
+          <StatusBadge status={item.is_active ? "ACTIVE" : "PAUSED"} />
           <ClassificationBadge value={item.classification} />
         </div>
         <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", marginTop: "var(--space-1)" }}>
           <span className="amount">{formatMinor(item.amount_minor, item.currency)}</span>
-          <span> / month · Next: day {item.day_of_month}</span>
+          <span> / month · Next: day {item.billing_day}</span>
         </div>
       </div>
       <div style={{ display: "flex", gap: "var(--space-2)", flexShrink: 0, flexWrap: "wrap" }}>
         <button className="btn btn-ghost btn-sm" onClick={() => onToggle(item)} aria-label={item.is_active ? "Pause" : "Resume"}>
+          {item.is_active ? <Pause size={13} /> : <Play size={13} />}
           {item.is_active ? "Pause" : "Resume"}
         </button>
-        <button className="btn btn-ghost btn-sm" onClick={() => onEdit(item)}>Edit</button>
-        <button className="btn btn-danger btn-sm" onClick={() => onDelete(item)}>Delete</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => onEdit(item)}><Pencil size={13} /> Edit</button>
+        <button className="btn btn-danger btn-sm" onClick={() => onDelete(item)}><Trash2 size={13} /> Delete</button>
       </div>
     </div>
   );

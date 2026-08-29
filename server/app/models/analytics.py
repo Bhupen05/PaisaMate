@@ -33,7 +33,7 @@ class DashboardSummary(BaseModel):
 
 class AnalyticsSummary(BaseModel):
     total_spending_minor: int
-    average_daily_minor: int
+    average_per_transaction_minor: int
     monthly_trend: list[MonthlyPoint]
     category_breakdown: list[CategoryBreakdown]
     classification_breakdown: list[ClassificationBreakdown]

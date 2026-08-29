@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import Link from "next/link";
 
 const registerSchema = z.object({
@@ -23,6 +24,12 @@ export default function RegisterPage() {
   const setAuth = useAuthStore((state) => state.setAuth);
   const [serverError, setServerError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [redirectParam, setRedirectParam] = useState<string | null>(null);
+
+  useEffect(() => {
+    const r = new URLSearchParams(window.location.search).get("redirect");
+    if (r && r.startsWith("/")) setRedirectParam(r);
+  }, []);
 
   const {
     register,
@@ -42,7 +49,8 @@ export default function RegisterPage() {
       const res = await api.post("/auth/register", data);
       const { user, access_token, refresh_token } = res.data;
       setAuth(user, access_token, refresh_token);
-      router.push("/dashboard");
+      const redirect = new URLSearchParams(window.location.search).get("redirect");
+      router.push(redirect && redirect.startsWith("/") ? redirect : "/dashboard");
     } catch (err: any) {
       console.error(err);
       setServerError(
@@ -66,7 +74,7 @@ export default function RegisterPage() {
         width: "100%",
         maxWidth: "440px",
         padding: "var(--space-8)",
-        borderRadius: "var(--radius-lg)",
+        borderRadius: "var(--radius-xl)",
         boxShadow: "var(--shadow-lg)",
         backgroundColor: "var(--color-surface)",
       }}>
@@ -86,17 +94,7 @@ export default function RegisterPage() {
 
         <form onSubmit={handleSubmit(onSubmit)}>
           {serverError && (
-            <div style={{
-              backgroundColor: "var(--color-danger-bg)",
-              color: "var(--color-danger)",
-              padding: "var(--space-3)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "var(--text-sm)",
-              marginBottom: "var(--space-4)",
-              border: "1px solid var(--color-danger)",
-            }}>
-              {serverError}
-            </div>
+            <ErrorBanner message={serverError} onDismiss={() => setServerError(null)} />
           )}
 
           <div className="form-group">
@@ -161,7 +159,7 @@ export default function RegisterPage() {
         <div style={{ textAlign: "center", marginTop: "var(--space-4)" }}>
           <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)" }}>
             Already have an account?{" "}
-            <Link href="/login" style={{ fontWeight: 600, textDecoration: "none" }}>
+            <Link href={redirectParam ? `/login?redirect=${encodeURIComponent(redirectParam)}` : "/login"} style={{ fontWeight: 600, textDecoration: "none" }}>
               Log in
             </Link>
           </p>

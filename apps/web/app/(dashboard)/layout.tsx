@@ -12,18 +12,24 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated, user, hasHydrated } = useAuthStore();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
-    if (!isAuthenticated) {
+  }, []);
+
+  useEffect(() => {
+    // Wait for the persisted auth state to be read back from localStorage
+    // before deciding to redirect, otherwise a hard reload always bounces
+    // an already-logged-in user to /login (isAuthenticated defaults false).
+    if (mounted && hasHydrated && !isAuthenticated) {
       router.replace("/login");
     }
-  }, [isAuthenticated, router]);
+  }, [mounted, hasHydrated, isAuthenticated, router]);
 
   // Prevent flash of content before client-side auth check
-  if (!mounted || !isAuthenticated || !user) {
+  if (!mounted || !hasHydrated || !isAuthenticated || !user) {
     return (
       <div style={{
         display: "flex",

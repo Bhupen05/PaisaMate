@@ -1,23 +1,30 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { useAuthStore } from "@/store/authStore";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { StatCard } from "@/components/finance/StatCard";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, PieChart, Pie, Cell,
 } from "recharts";
+import {
+  TrendingUp,
+  AlertTriangle,
+  Tag,
+  PieChart as PieChartIcon,
+} from "lucide-react";
 
 interface MonthlyPoint { month: string; total_minor: number; personal_minor: number; shared_minor: number; }
 interface CategoryBreakdown { category_id: string; total_minor: number; count: number; }
 interface ClassificationBreakdown { classification: string; total_minor: number; count: number; }
 interface AnalyticsData {
   total_spending_minor: number;
-  average_daily_minor: number;
+  average_per_transaction_minor: number;
   monthly_trend: MonthlyPoint[];
   category_breakdown: CategoryBreakdown[];
   classification_breakdown: ClassificationBreakdown[];
@@ -34,16 +41,12 @@ export default function AnalyticsPage() {
   const { user } = useAuthStore();
   const currency = user?.currency ?? "INR";
 
-  const [data, setData] = useState<AnalyticsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.get("/analytics/summary")
-      .then(r => setData(r.data))
-      .catch(() => setError("Unable to load analytics. Please try again."))
-      .finally(() => setLoading(false));
-  }, []);
+  const analyticsQuery = useQuery({
+    queryKey: ["analytics-summary"],
+    queryFn: async () => (await api.get<AnalyticsData>("/analytics/summary")).data,
+  });
+  const data = analyticsQuery.data ?? null;
+  const loading = analyticsQuery.isPending;
 
   const cur = data?.currency ?? currency;
 
@@ -70,20 +73,14 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {analyticsQuery.isError && <ErrorBanner message="Unable to load analytics. Please try again." />}
 
       {loading ? <LoadingSpinner centered /> : !data ? null : (
         <>
           {/* KPI Overview */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--space-4)", marginBottom: "var(--space-6)" }}>
-            <div className="card" style={{ padding: "var(--space-5)" }}>
-              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Tracked</div>
-              <div className="amount" style={{ fontSize: "var(--text-2xl)", fontWeight: 700, marginTop: "var(--space-2)" }}>{formatMinor(data.total_spending_minor, cur)}</div>
-            </div>
-            <div className="card" style={{ padding: "var(--space-5)" }}>
-              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Avg per Transaction</div>
-              <div className="amount" style={{ fontSize: "var(--text-2xl)", fontWeight: 700, marginTop: "var(--space-2)" }}>{formatMinor(data.average_daily_minor, cur)}</div>
-            </div>
+            <StatCard label="Total Tracked" value={formatMinor(data.total_spending_minor, cur)} decorColor="var(--color-text)" />
+            <StatCard label="Avg per Transaction" value={formatMinor(data.average_per_transaction_minor, cur)} decorColor="var(--color-text)" />
           </div>
 
           {/* Insight cards */}
@@ -94,8 +91,10 @@ export default function AnalyticsPage() {
                   flex: "1 1 220px", padding: "var(--space-4) var(--space-5)",
                   background: "var(--color-accent-light)", borderRadius: "var(--radius-md)",
                   borderLeft: "3px solid var(--color-accent)", fontSize: "var(--text-sm)", color: "var(--color-text)",
+                  display: "flex", alignItems: "flex-start", gap: "var(--space-2)",
                 }}>
-                  💡 <strong style={{ textTransform: "capitalize" }}>{topCategory.category_id}</strong> is your largest spending category.
+                  <TrendingUp size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span><strong style={{ textTransform: "capitalize" }}>{topCategory.category_id}</strong> is your largest spending category.</span>
                 </div>
               )}
               {wantPct !== null && (
@@ -103,8 +102,10 @@ export default function AnalyticsPage() {
                   flex: "1 1 220px", padding: "var(--space-4) var(--space-5)",
                   background: "var(--color-want-bg)", borderRadius: "var(--radius-md)",
                   borderLeft: "3px solid var(--color-want)", fontSize: "var(--text-sm)", color: "var(--color-text)",
+                  display: "flex", alignItems: "flex-start", gap: "var(--space-2)",
                 }}>
-                  💡 Wants represent <strong>{wantPct}%</strong> of your total spending.
+                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>Wants represent <strong>{wantPct}%</strong> of your total spending.</span>
                 </div>
               )}
             </div>
@@ -115,7 +116,7 @@ export default function AnalyticsPage() {
             <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-1)" }}>Spending Trend</h2>
             <p style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginBottom: "var(--space-4)" }}>Last 6 months · Personal vs Shared</p>
             {trendData.every(t => t.Personal === 0 && t.Shared === 0) ? (
-              <EmptyState icon="📈" title="No trend data yet" description="Start tracking expenses to see your monthly trends." />
+              <EmptyState icon={<TrendingUp size={40} />} title="No trend data yet" description="Start tracking expenses to see your monthly trends." />
             ) : (
               <div style={{ width: "100%", height: 280 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -140,7 +141,7 @@ export default function AnalyticsPage() {
               <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-1)" }}>By Category</h2>
               <p style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginBottom: "var(--space-4)" }}>All time · highest first</p>
               {categoryData.length === 0 ? (
-                <EmptyState icon="🏷️" title="No category data" description="Categorise your expenses to see this breakdown." />
+                <EmptyState icon={<Tag size={40} />} title="No category data" description="Categorise your expenses to see this breakdown." />
               ) : (
                 <div style={{ width: "100%", height: 280 }}>
                   <ResponsiveContainer width="100%" height="100%">
@@ -163,7 +164,7 @@ export default function AnalyticsPage() {
               <h2 style={{ fontSize: "var(--text-base)", fontWeight: 700, marginBottom: "var(--space-1)" }}>Need / Want / Dream</h2>
               <p style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginBottom: "var(--space-4)" }}>All time · spending classification</p>
               {pieData.length === 0 ? (
-                <EmptyState icon="🥧" title="No classification data" description="Classify your expenses as Need, Want, or Dream." />
+                <EmptyState icon={<PieChartIcon size={40} />} title="No classification data" description="Classify your expenses as Need, Want, or Dream." />
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-4)" }}>
                   <div style={{ width: 200, height: 200 }}>
