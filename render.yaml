@@ -3,10 +3,8 @@ services:
     name: paisamate-api
     runtime: python
     pythonVersion: 3.11
-    buildCommand: |
-      pip install --upgrade pip setuptools wheel &&
-      pip install --no-build-isolation --prefer-binary -r server/requirements.txt
-    startCommand: cd server && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: cd server && pip install --upgrade pip setuptools wheel && pip install --no-build-isolation --prefer-binary -r requirements.txt
+    startCommand: cd server && python -m uvicorn main:app --host 0.0.0.0 --port 8000 --no-reload
     envVars:
       - key: MONGODB_URL
         sync: false
