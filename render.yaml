@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: paisamate-api
+    runtime: python
+    pythonVersion: 3.11
+    buildCommand: pip install --only-binary :all: -r server/requirements.txt
+    startCommand: cd server && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+    env: python
+    plan: starter
+    
+  - type: web
+    name: paisamate-web
+    runtime: node
+    nodeVersion: 18
+    buildCommand: cd apps/web && npm install && npm run build
+    startCommand: cd apps/web && npm start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://paisamate-api.onrender.com/api
+    plan: starter

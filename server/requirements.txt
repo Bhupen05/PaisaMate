@@ -1,10 +1,11 @@
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-motor==3.5.0
-pymongo==4.10.1
+# Core dependencies - only binary wheels (no source compilation)
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+motor==3.3.2
+pymongo==4.6.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-dotenv==1.0.1
-pydantic[email]==2.10.3
-pydantic-settings==2.6.1
-python-multipart==0.0.9
+python-dotenv==1.0.0
+pydantic[email]==2.5.3
+pydantic-settings==2.1.0
+python-multipart==0.0.6
