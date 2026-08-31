@@ -3,12 +3,17 @@ services:
     name: paisamate-api
     runtime: python
     pythonVersion: 3.11
-    buildCommand: pip install --only-binary :all: -r server/requirements.txt
+    buildCommand: |
+      pip install --upgrade pip setuptools wheel &&
+      pip install --no-build-isolation --prefer-binary -r server/requirements.txt
     startCommand: cd server && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11
-    env: python
+      - key: MONGODB_URL
+        sync: false
+      - key: DB_NAME
+        value: suraty_prod
+      - key: SECRET_KEY
+        generateValue: true
     plan: starter
     
   - type: web

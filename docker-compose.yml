@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paisamate-api
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URL: mongodb://mongo:27017
+      DB_NAME: suraty_prod
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key}
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      REFRESH_TOKEN_EXPIRE_DAYS: 30
+    depends_on:
+      - mongo
+    volumes:
+      - ./server:/app
+    command: python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: paisamate-web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:8000/api
+    depends_on:
+      - api
+    volumes:
+      - ./apps/web:/app
+
+  mongo:
+    image: mongo:7.0-alpine
+    container_name: paisamate-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: suraty_prod
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:
