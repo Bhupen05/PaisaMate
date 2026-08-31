@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: paisamate-api
+    runtime: python
+    buildCommand: pip install -r server/requirements-prod.txt
+    startCommand: cd server && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONGODB_URL
+        value: mongodb+srv://user:pass@cluster.mongodb.net/suraty
+      - key: DB_NAME
+        value: suraty_prod
+      - key: SECRET_KEY
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.11

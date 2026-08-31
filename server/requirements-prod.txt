@@ -1,0 +1,17 @@
+# Production requirements - optimized for deployment platforms like Render, Heroku, etc.
+# These versions ensure pre-built wheels are available and no compilation is needed
+
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+motor==3.5.0
+pymongo==4.10.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.1
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+python-multipart==0.0.9
+
+# Optional: For production
+# gunicorn==23.0.0
+# supervisor==4.2.5
