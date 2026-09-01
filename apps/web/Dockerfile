@@ -7,7 +7,7 @@ COPY apps/web/package*.json ./
 RUN npm ci
 
 # Build with production API URL
-ENV NEXT_PUBLIC_API_URL=https://paisamate-api.onrender.com/api
+ENV API_URL=https://paisamate-nui6.onrender.com
 COPY apps/web .
 RUN npm run build
 

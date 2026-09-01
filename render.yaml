@@ -24,6 +24,6 @@ services:
     startCommand: cd apps/web && npm start
     rewrites: [{"source": "/(.*)", "destination": "/"}]
     envVars:
-      - key: NEXT_PUBLIC_API_URL
-        value: https://paisamate-api.onrender.com/api
+      - key: API_URL
+        value: https://paisamate-nui6.onrender.com
     plan: starter
