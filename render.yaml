@@ -22,6 +22,7 @@ services:
     nodeVersion: 18
     buildCommand: cd apps/web && npm install && npm run build
     startCommand: cd apps/web && npm start
+    rewrites: [{"source": "/(.*)", "destination": "/"}]
     envVars:
       - key: NEXT_PUBLIC_API_URL
         value: https://paisamate-api.onrender.com/api
