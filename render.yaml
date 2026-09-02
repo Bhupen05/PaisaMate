@@ -13,7 +13,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: FRONTEND_ORIGINS
-        value: https://paisamate-web.onrender.com,http://localhost:3000
+        value: https://paisamate-nui6.onrender.com
     plan: starter
     
   - type: web
